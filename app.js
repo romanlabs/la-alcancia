@@ -6,7 +6,7 @@ const MINUTOS_BLOQUEO = 5;
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 const PLANTILLA = [
-  { nombre: 'Tarjeta de crédito (préstamo a mamá)', tipo: 'mensual', prioridad: 1, deuda: true,
+  { nombre: 'Tarjeta (préstamo a mamá)', tipo: 'mensual', prioridad: 1, deuda: true,
     ayuda: 'La cuota que acordaron cada mes. Abajo, cuánto se debe en total.' },
   { nombre: 'Recibo de luz', tipo: 'mensual', prioridad: 1 },
   { nombre: 'Recibo de agua', tipo: 'mensual', prioridad: 1 },
@@ -177,7 +177,7 @@ function pantallaInicio(c) {
       <p class="suave">Esos días no se cuentan para apartar.</p>
       ${selectorDescanso()}
       <h2>Lo que hay que pagar</h2>
-      ${PLANTILLA.map(filaPlantilla).join('')}
+      <div class="rejilla">${PLANTILLA.map(filaPlantilla).join('')}</div>
       <button type="submit" class="principal">Empezar</button>
     </form>`;
 
@@ -217,6 +217,7 @@ function pantallaHoy(c) {
   const descansa = datos.descanso.includes(L.aFecha(f).getDay());
 
   c.innerHTML = `
+    <div class="columnas"><div>
     <div class="tarjeta destacada">
       <p class="suave">${apartadoHoy ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar'}</p>
       <p class="cifra">${pesos(pendiente)}</p>
@@ -238,9 +239,10 @@ function pantallaHoy(c) {
       <div class="tarjeta"><ul class="lista">${registrosHoy.map((r) => `
         <li><span>Le entró ${pesos(r.ingreso)}, apartó <b>${pesos(r.apartado)}</b></span>
         <button class="chico" data-deshacer="${r.id}">Deshacer</button></li>`).join('')}</ul></div>` : ''}
-
-    <h2>Lo que viene</h2>
+    </div><div>
+    <h2 class="primero">Lo que viene</h2>
     ${proximos.map((o) => tarjetaCorta(o, f)).join('') || '<p class="suave">No hay pagos. Agréguelos en "Pagos".</p>'}
+    </div></div>
   `;
 
   const form = $('#form-dia');
@@ -340,7 +342,7 @@ function pantallaPagos(c) {
       <p class="cifra-m">${pesos(totalApartado)}</p>
     </div>
     <button class="principal" id="btn-nuevo">+ Agregar un pago</button>
-    ${lista.map(({ o, cuota }) => {
+    <div class="rejilla">${lista.map(({ o, cuota }) => {
       const est = L.estado(o, f);
       const pct = Math.min(100, Math.round((o.apartado / (o.monto || 1)) * 100));
       const cada = o.tipo === 'mensual' ? `cada mes el ${o.dia}` : o.tipo === 'semanal' ? `cada ${DIAS[o.dia]}` : 'una sola vez';
@@ -357,7 +359,7 @@ function pantallaPagos(c) {
           <button class="chico" data-editar="${o.id}">Editar</button>
         </div>
       </div>`;
-    }).join('')}
+    }).join('')}</div>
     ${terminadas.length ? `
       <h2>Terminadas 🎉</h2>
       ${terminadas.map((o) => `
@@ -393,7 +395,7 @@ function dialogoPagar(id) {
     <label>¿Cuánto pagó?</label>
     ${campoPesos('pagado', o.monto)}
     <p class="suave">Si es el fondo del carro y no lo usó, ponga $0: la plata sigue guardada y pasa al otro mes.</p>
-    <div class="botones"><button value="cancelar" formnovalidate>Cancelar</button><button class="principal" style="margin:0;flex:1">Pagado</button></div>
+    <div class="botones acciones"><button value="cancelar" formnovalidate>Cancelar</button><button class="principal" style="margin:0;flex:1">Pagado</button></div>
   `, (fd) => {
     const pagado = num(fd.get('pagado'));
     const antes = o.apartado;
@@ -426,7 +428,7 @@ function editar(id) {
       <option value="3" ${o.prioridad === 3 ? 'selected' : ''}>Puede esperar</option>
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
-    <div class="botones">
+    <div class="botones acciones">
       <button value="cancelar" formnovalidate>Cancelar</button>
       ${id ? '<button value="borrar" class="peligro" formnovalidate>Borrar</button>' : ''}
       <button value="guardar" class="principal" style="margin:0;flex:1">Guardar</button>
@@ -659,6 +661,13 @@ function pantallaBloqueo(c) {
     render();
   };
 }
+
+/* Mientras se escribe (teclado abierto) se esconde la barra de abajo */
+const esCampo = (el) => el && el.matches && el.matches('input:not([type=checkbox]):not([type=file]), select');
+document.addEventListener('focusin', (e) => { if (esCampo(e.target)) document.body.classList.add('escribiendo'); });
+document.addEventListener('focusout', () => {
+  setTimeout(() => { if (!esCampo(document.activeElement)) document.body.classList.remove('escribiendo'); }, 50);
+});
 
 /* ---------- arranque ---------- */
 let bloqueada = true;
