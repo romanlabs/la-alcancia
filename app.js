@@ -68,7 +68,13 @@ function estadoNuevo() {
     diasSemana: 6, margen: 2, cuotaDiaria: 40000,
     fuentes: ['InDrive'], extra: 0,
     obligaciones: [], registros: [], pagos: [],
+    borrados: { obligaciones: [], registros: [], pagos: [] }, // para borrarlos también en la nube
   };
+}
+/** Anota que algo se borró aquí, para borrarlo también en la nube (y solo eso). */
+function marcarBorrado(tabla, id) {
+  if (!datos.borrados) datos.borrados = { obligaciones: [], registros: [], pagos: [] };
+  if (!datos.borrados[tabla].includes(id)) datos.borrados[tabla].push(id);
 }
 /** Pone al día datos guardados con versiones anteriores de la app. */
 function migrar(d) {
@@ -76,6 +82,8 @@ function migrar(d) {
   if (d.diasSemana == null && Array.isArray(d.descanso)) n.diasSemana = Math.max(1, 7 - d.descanso.length);
   delete n.descanso;
   if (!Array.isArray(n.fuentes) || !n.fuentes.length) n.fuentes = ['InDrive'];
+  const b = n.borrados || {};
+  n.borrados = { obligaciones: b.obligaciones || [], registros: b.registros || [], pagos: b.pagos || [] };
   n.registros = (n.registros || []).map((r) => ({
     ingresos: r.ingresos || { Total: r.ingreso || 0 },
     gasolina: r.gasolina ?? (r.carro || 0),
@@ -246,10 +254,14 @@ function filaPago(p, i) {
       <input name="nombre-${i}" value="${esc(p.nombre)}" aria-label="Nombre" placeholder="Nombre del pago" style="font-weight:700">
       ${p.ayuda ? `<p class="suave">${esc(p.ayuda)}</p>` : ''}
       <div class="fila">
-        <div><label>${p.tipo === 'semanal' ? 'Valor semanal' : 'Valor'}</label>${campoPesos('monto-' + i)}</div>
+        <div><label>${p.tipo === 'semanal' ? 'Valor semanal' : p.deuda ? 'Cuota del mes' : 'Valor'}</label>${campoPesos('monto-' + i)}</div>
         <div>${cuando}</div>
       </div>
-      ${p.deuda ? `<label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo-' + i)}` : ''}
+      ${p.deuda ? `<div class="fila">
+          <div><label>Deuda total</label>${campoPesos('saldo-' + i)}</div>
+          <div><label>¿En cuántas cuotas?</label><input name="cuotas-${i}" inputmode="numeric" maxlength="3" placeholder="Ej: 6"></div>
+        </div>
+        <p class="suave">Si no sabe la cuota del mes, ponga la deuda total y en cuántas cuotas: la app la calcula.</p>` : ''}
       ${p.tipo === 'mensual' ? `<label class="check"><input type="checkbox" name="pagado-${i}"> Ya pagué el de este mes</label>` : ''}
       <input type="hidden" name="tipo-${i}" value="${p.tipo}"><input type="hidden" name="prio-${i}" value="${p.prioridad}">
       <input type="hidden" name="nombreBase-${i}" value="${esc(p.nombre)}">
@@ -290,18 +302,25 @@ function pantallaInicio(c) {
     const errores = [];
     $$('[data-fila]').forEach((fila) => {
       const i = fila.dataset.fila;
-      const monto = num(fd.get('monto-' + i));
-      if (!monto) return;
       const tipo = fd.get('tipo-' + i);
-      const dia = Number(fd.get('dia-' + i));
       const nombre = String(fd.get('nombre-' + i)).trim() || fd.get('nombreBase-' + i) || 'Pago';
-      if (tipo === 'mensual' && !(dia >= 1 && dia <= 31)) return errores.push(nombre);
       const saldo = num(fd.get('saldo-' + i));
+      const cuotas = num(fd.get('cuotas-' + i));
+      let monto = num(fd.get('monto-' + i));
+      if (!monto && saldo && cuotas) monto = L.redondearMil(saldo / cuotas);
+      const diaTexto = tipo === 'mensual' ? String(fd.get('dia-' + i) || '').trim() : '';
+      if (!monto) {
+        // Algo llenó pero falta el valor: avisar en vez de saltarla sin decir nada.
+        if (saldo || diaTexto || cuotas) errores.push(`A "${nombre}" le falta la cuota del mes (o la deuda total y en cuántas cuotas)`);
+        return;
+      }
+      const dia = Number(fd.get('dia-' + i));
+      if (tipo === 'mensual' && !(dia >= 1 && dia <= 31)) return errores.push(`A "${nombre}" le falta el día que vence (1 a 31)`);
       const campos = { nombre, tipo, dia, monto, prioridad: Number(fd.get('prio-' + i)), saldoTotal: saldo || null };
       if (tipo === 'mensual' && fd.get('pagado-' + i)) campos.proximo = L.proximaSiYaPagoEsteMes(hoy(), dia);
       nuevas.push(crearObligacion(campos));
     });
-    if (errores.length) return avisar(`Falta el día de pago de: ${errores[0]}`);
+    if (errores.length) return avisar(errores[0]);
     if (!nuevas.length) return avisar('Ponga al menos un valor para empezar');
     datos.obligaciones = nuevas;
     datos.configurado = true;
@@ -390,6 +409,7 @@ function pantallaHoy(c) {
     </div><div>
     <h2 class="primero">Lo que viene</h2>
     ${proximos.map((o) => tarjetaCorta(o, f, p.faltantes)).join('') || '<p class="suave">No hay pagos. Agréguelos en "Pagos".</p>'}
+    ${activas().length > proximos.length ? `<button type="button" class="principal" id="btn-ver-todos">Ver todas las cuentas (${activas().length})</button>` : ''}
     </div></div>
   `;
 
@@ -415,6 +435,7 @@ function pantallaHoy(c) {
     };
   }
 
+  if ($('#btn-ver-todos')) $('#btn-ver-todos').onclick = () => ir('sobres');
   form.addEventListener('input', actualizar);
   form.addEventListener('submit', (e) => e.preventDefault());
   actualizar();
@@ -461,6 +482,7 @@ function editarRegistro(id) {
         if (!si) return;
         revertirReparto(r);
         datos.registros = datos.registros.filter((x) => x.id !== id);
+        marcarBorrado('registros', id);
         $('#modal').close();
         guardar(); avisar('Día borrado'); render();
       });
@@ -611,6 +633,7 @@ async function deshacerPago(id) {
   if (!(await preguntar(`¿Deshacer el pago de ${pg.nombre} por ${pesos(pg.monto)}? Vuelve a quedar como antes de pagar.`, 'Deshacer'))) return;
   Object.assign(buscar(pg.obligacionId), pg.antes);
   datos.pagos = datos.pagos.filter((x) => x.id !== id);
+  marcarBorrado('pagos', id);
   guardar(); avisar('Pago deshecho'); render();
 }
 
@@ -630,7 +653,11 @@ function editar(id) {
       <p class="suave">Cámbiela si este mes el recibo llega otro día.</p>` : ''}
     ${o.tipo !== 'semanal' && o.tipo !== 'unica' ? `<label class="check"><input type="checkbox" name="yaPagado"> Ya está pagado el de este mes (el próximo es el del otro mes)</label>` : ''}
     <label>¿Cuánto es?</label>${campoPesos('monto', o.monto)}
-    <label>Deuda total <span class="suave">(opcional; se va bajando con cada pago)</span></label>${campoPesos('saldo', o.saldoTotal)}
+    <div class="fila">
+      <div><label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo', o.saldoTotal)}</div>
+      <div><label>¿En cuántas cuotas?</label><input name="cuotas" inputmode="numeric" maxlength="3" placeholder="Opcional"></div>
+    </div>
+    <p class="suave">La deuda total baja con cada pago. Si deja "¿Cuánto es?" vacío, la cuota se calcula con la deuda y las cuotas.</p>
     <label>¿Qué tan grave es no pagarlo a tiempo?</label>
     <select name="prioridad">
       <option value="1" ${o.prioridad === 1 ? 'selected' : ''}>Muy grave (cortan el servicio, intereses)</option>
@@ -647,6 +674,7 @@ function editar(id) {
         if (!si) return;
         datos.extra += o.apartado || 0;
         datos.obligaciones = datos.obligaciones.filter((x) => x.id !== id);
+        marcarBorrado('obligaciones', id);
         $('#modal').close();
         guardar(); render();
       });
@@ -663,7 +691,8 @@ function editar(id) {
     };
     if (tipo === 'unica') campos.fecha = fd.get('fecha');
     else campos.dia = Number(fd.get('dia'));
-    if (!campos.monto) { avisar('Falta cuánto es'); return false; }
+    if (!campos.monto && campos.saldoTotal && num(fd.get('cuotas'))) campos.monto = L.redondearMil(campos.saldoTotal / num(fd.get('cuotas')));
+    if (!campos.monto) { avisar('Falta cuánto es (o la deuda total y en cuántas cuotas)'); return false; }
     if (tipo === 'mensual' && !(campos.dia >= 1 && campos.dia <= 31)) { avisar('El día del mes va de 1 a 31'); return false; }
     if (tipo === 'unica' && !campos.fecha) { avisar('Falta la fecha'); return false; }
 
@@ -852,7 +881,12 @@ function pantallaAjustes(c) {
       const d = JSON.parse(await archivo.text());
       if (!Array.isArray(d.obligaciones)) throw new Error('formato');
       if (!(await preguntar('Esto reemplaza lo que hay en este teléfono por la copia. ¿Seguir?', 'Reemplazar'))) return;
-      datos = migrar(d);
+      const nuevos = migrar(d);
+      for (const t of ['obligaciones', 'registros', 'pagos']) {
+        const quedan = new Set(nuevos[t].map((x) => x.id));
+        for (const x of datos[t]) if (!quedan.has(x.id)) nuevos.borrados[t].push(x.id);
+      }
+      datos = nuevos;
       guardar();
       avisar('Copia cargada');
       ir('hoy');
@@ -863,7 +897,9 @@ function pantallaAjustes(c) {
   $('#btn-borrar').onclick = async () => {
     const msg = Nube.sesion ? '¿Seguro? Se borra todo lo registrado, en este teléfono Y en la nube.' : '¿Seguro? Se borra todo lo registrado en este teléfono.';
     if (!(await preguntar(msg, 'Borrar todo'))) return;
+    const borrados = { obligaciones: datos.obligaciones.map((x) => x.id), registros: datos.registros.map((x) => x.id), pagos: datos.pagos.map((x) => x.id) };
     datos = estadoNuevo();
+    datos.borrados = borrados;
     guardar();
     ir('hoy');
   };
@@ -970,7 +1006,7 @@ function traducirError(e) {
 async function traerDeLaNube(forzarPintar = false) {
   if (!Nube.sesion) return;
   const remotos = await Nube.sincronizar(datos, async () =>
-    (await preguntar('Hay datos en la nube y también en este celular. ¿Cuáles quiere usar? "Usar la nube" reemplaza lo de este celular; "Cancelar" sube lo de este celular a la nube.', 'Usar la nube')) ? 'nube' : 'celular');
+    (await preguntar('Hay datos en la nube y también en este celular. "Juntar ambos" sube lo de este celular sin borrar nada de la nube. "Cancelar" deja solo lo de la nube.', 'Juntar ambos')) ? 'celular' : 'nube');
   if (remotos) {
     const antes = JSON.stringify(datos);
     datos = migrar({ ...datos, ...remotos });
@@ -985,6 +1021,7 @@ async function traerDeLaNube(forzarPintar = false) {
 async function iniciarNube() {
   if (typeof Nube === 'undefined' || !Nube.disponible) return;
   Nube.onCambio(pintarEstadoNube);
+  Nube.onSubido(guardarLocal); // la lista de borrados ya se aplicó en la nube
   await Nube.iniciar();
   pintarEstadoNube();
   await traerDeLaNube(true);

@@ -21,6 +21,7 @@ const Nube = (() => {
   let estado = disponible ? 'sin-sesion' : 'no-disponible'; // sin-sesion | al-dia | subiendo | bajando | error
   let temporizador = null;
   let alCambiar = () => {};
+  let alSubir = () => {};
 
   const marcar = (v) => { try { v ? localStorage.setItem(PENDIENTE, '1') : localStorage.removeItem(PENDIENTE); } catch (e) { /* nada */ } };
   const hayPendiente = () => { try { return localStorage.getItem(PENDIENTE) === '1'; } catch (e) { return false; } };
@@ -83,11 +84,16 @@ const Nube = (() => {
       ];
       for (const [tabla, filas] of tablas) {
         if (filas.length) await chequear(sb.from(tabla).upsert(filas));
-        const ids = filas.map((f) => `"${String(f.id).replace(/"/g, '')}"`).join(',');
-        const borrar = sb.from(tabla).delete().eq('user_id', uid);
-        await chequear(filas.length ? borrar.not('id', 'in', `(${ids})`) : borrar);
+        // Solo se borra en la nube lo que se borró a propósito en el celular.
+        // (Antes se borraba todo lo que el celular no tuviera, y un celular desactualizado podía borrar cuentas.)
+        const borrar = [...((datos.borrados && datos.borrados[tabla]) || [])];
+        if (borrar.length) {
+          await chequear(sb.from(tabla).delete().eq('user_id', uid).in('id', borrar));
+          datos.borrados[tabla] = datos.borrados[tabla].filter((id) => !borrar.includes(id));
+        }
       }
       marcar(false);
+      alSubir();
       poner('al-dia');
     } catch (e) {
       console.warn('[nube] no se pudo subir', e);
@@ -127,6 +133,7 @@ const Nube = (() => {
     get estado() { return estado; },
     get correo() { return sesion?.user?.email || ''; },
     onCambio(fn) { alCambiar = fn; },
+    onSubido(fn) { alSubir = fn; },
 
     async iniciar() {
       if (!sb) return null;
@@ -177,8 +184,13 @@ const Nube = (() => {
       } else if (anterior !== uid && localConDatos) {
         // Primera vez en este celular con datos en ambos lados: que el usuario elija.
         const cual = await preguntarCual();
-        if (cual === 'celular') await subir(datosLocales);
-        else usar = remotos;
+        if (cual === 'celular') {
+          await subir(datosLocales); // junta: sube lo del celular sin borrar lo de la nube
+          usar = await bajar();
+          if (usar === undefined) usar = null;
+        } else {
+          usar = remotos;
+        }
       } else {
         usar = remotos;
       }
