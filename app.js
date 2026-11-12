@@ -67,13 +67,15 @@ function estadoNuevo() {
     version: 3, configurado: false,
     diasSemana: 6, margen: 2, cuotaDiaria: 40000,
     fuentes: ['InDrive'], extra: 0,
+    ahorroPct: 0, metas: [], banco: 'Nu',
     obligaciones: [], registros: [], pagos: [],
-    borrados: { obligaciones: [], registros: [], pagos: [] }, // para borrarlos también en la nube
+    borrados: { obligaciones: [], registros: [], pagos: [], metas: [] }, // para borrarlos también en la nube
   };
 }
 /** Anota que algo se borró aquí, para borrarlo también en la nube (y solo eso). */
 function marcarBorrado(tabla, id) {
-  if (!datos.borrados) datos.borrados = { obligaciones: [], registros: [], pagos: [] };
+  if (!datos.borrados) datos.borrados = { obligaciones: [], registros: [], pagos: [], metas: [] };
+  if (!datos.borrados[tabla]) datos.borrados[tabla] = [];
   if (!datos.borrados[tabla].includes(id)) datos.borrados[tabla].push(id);
 }
 /** Pone al día datos guardados con versiones anteriores de la app. */
@@ -83,13 +85,16 @@ function migrar(d) {
   delete n.descanso;
   if (!Array.isArray(n.fuentes) || !n.fuentes.length) n.fuentes = ['InDrive'];
   const b = n.borrados || {};
-  n.borrados = { obligaciones: b.obligaciones || [], registros: b.registros || [], pagos: b.pagos || [] };
+  n.borrados = { obligaciones: b.obligaciones || [], registros: b.registros || [], pagos: b.pagos || [], metas: b.metas || [] };
+  n.metas = Array.isArray(n.metas) ? n.metas : [];
+  n.ahorroPct = Math.min(100, Math.max(0, Number(n.ahorroPct) || 0));
   n.registros = (n.registros || []).map((r) => ({
     ingresos: r.ingresos || { Total: r.ingreso || 0 },
     gasolina: r.gasolina ?? (r.carro || 0),
     otros: r.otros || 0,
     extra: r.extra || 0,
     nota: r.nota || '',
+    ahorro: r.ahorro || {},
     ...r,
   }));
   n.version = 3;
@@ -133,10 +138,15 @@ const apartadoDelDia = (fecha) => datos.registros.filter((r) => r.fecha === fech
 function proyeccion() {
   const f = hoy();
   const ya = apartadoDelDia(f);
-  let p = L.plan(activas(), f, datos, ya);
+  const yaCuentas = datos.registros.filter((r) => r.fecha === f).reduce((s, r) => s + sumar(r.reparto), 0);
+  const fraccion = 1 - Math.min(90, datos.ahorroPct || 0) / 100; // parte que va a cuentas
+  const cuotaCuentas = Math.round((datos.cuotaDiaria || 0) * fraccion);
+  let p = L.plan(activas(), f, { ...datos, cuotaDiaria: cuotaCuentas }, yaCuentas);
   const automatica = !datos.cuotaDiaria;
-  if (automatica) p = L.plan(activas(), f, { ...datos, cuotaDiaria: p.necesaria }, ya);
-  const objetivo = automatica ? p.necesaria : datos.cuotaDiaria;
+  if (automatica) p = L.plan(activas(), f, { ...datos, cuotaDiaria: p.necesaria }, yaCuentas);
+  const objetivo = automatica ? L.redondearMil(p.necesaria / fraccion) : datos.cuotaDiaria;
+  p.necesariaTotal = L.redondearMil(p.necesaria / fraccion);
+  p.fraccion = fraccion;
   const faltantes = {};
   for (const x of p.items) if (x.primera) faltantes[x.id] = x.faltante;
   return { ...p, automatica, objetivo, ya, pendienteHoy: Math.max(0, objetivo - ya), faltantes };
@@ -156,9 +166,18 @@ function aplicarReparto(r) {
     if (o) o.apartado += m;
     else datos.extra += m; // el pago ya no existe: la plata queda como ahorro extra
   }
+  for (const [id, m] of Object.entries(r.ahorro || {})) {
+    const meta = buscarMeta(id);
+    if (meta) meta.ahorrado = (meta.ahorrado || 0) + m;
+    else datos.extra += m;
+  }
   datos.extra += r.extra || 0;
 }
 function revertirReparto(r) {
+  for (const [id, m] of Object.entries(r.ahorro || {})) {
+    const meta = buscarMeta(id);
+    if (meta) meta.ahorrado = Math.max(0, (meta.ahorrado || 0) - m);
+  }
   for (const [id, m] of Object.entries(r.reparto || {})) {
     const o = buscar(id);
     if (o) o.apartado = Math.max(0, o.apartado - m);
@@ -185,7 +204,7 @@ function render() {
   const c = $('#contenido');
   if (bloqueada) { nav.hidden = true; return pantallaBloqueo(c); }
   if (!datos.configurado) return pantallaInicio(c);
-  ({ hoy: pantallaHoy, sobres: pantallaPagos, historial: pantallaHistorial, ajustes: pantallaAjustes }[vista] || pantallaHoy)(c);
+  ({ hoy: pantallaHoy, sobres: pantallaPagos, ahorro: pantallaAhorro, historial: pantallaHistorial, ajustes: pantallaAjustes }[vista] || pantallaHoy)(c);
 }
 
 function abrirModal(html, alEnviar, alAbrir) {
@@ -341,7 +360,9 @@ function avisoPlan(p) {
   const cuota = pesos(p.objetivo);
   if (!p.items.length) return '';
   const normal = cuotaMesNormal();
-  const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normal)}</b> diarios trabajando ${datos.diasSemana} días a la semana.</p>` : '';
+  const normalTotal = L.redondearMil(normal / (p.fraccion || 1));
+  const conAhorro = datos.ahorroPct ? ` (contando el ${datos.ahorroPct}% para ahorro)` : '';
+  const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normalTotal)}</b> diarios${conAhorro}, trabajando ${datos.diasSemana} días a la semana.</p>` : '';
   if (!malos.length) {
     return `<div class="alerta verde">✔ Con ${cuota} diarios alcanza para todo lo del próximo mes.${lineaNormal}</div>`;
   }
@@ -350,7 +371,7 @@ function avisoPlan(p) {
       Con ${cuota} diarios no alcanza para:
       <ul class="lista" style="margin:6px 0">${malos.slice(0, 4).map((x) =>
         `<li><span>${esc(x.nombre)} <span class="suave">(${fechaCorta(x.fecha)})</span></span><span class="monto">faltan ${pesos(x.faltante)}</span></li>`).join('')}</ul>
-      Para cubrir todo a tiempo habría que apartar <b>${pesos(p.necesaria)}</b> al día, trabajar más días, o abonar de otro lado.
+      Para cubrir todo a tiempo habría que apartar <b>${pesos(p.necesariaTotal || p.necesaria)}</b> al día${conAhorro}, trabajar más días, o abonar de otro lado.
       ${lineaNormal}
     </div>`;
 }
@@ -419,14 +440,14 @@ function pantallaHoy(c) {
   function actualizar() {
     const apartar = num(form.apartar.value);
     const d = leerDia(form);
-    const r = L.repartirDia(activas(), apartar, f, datos);
+    const r = L.repartirTodo(activas(), metasActivas(), apartar, f, datos);
     calculo.innerHTML = explicarReparto(r, apartar) + (d.ingreso
       ? `<div class="alerta verde">Entró ${pesos(d.ingreso)}${d.carro ? `, gastos ${pesos(d.carro)}` : ''}: para la casa quedan ${pesos(Math.max(0, d.neto - apartar))}</div>`
       : '');
     $('#btn-registrar').disabled = apartar <= 0;
     $('#btn-registrar').onclick = () => {
       const { neto: _n, ...dia } = d;
-      const reg = { id: nuevoId(), fecha: hoy(), ...dia, apartado: apartar, reparto: r.reparto, extra: r.extra };
+      const reg = { id: nuevoId(), fecha: hoy(), ...dia, apartado: apartar, reparto: r.reparto, ahorro: r.ahorro, extra: r.extra };
       aplicarReparto(reg);
       datos.registros.push(reg);
       guardar();
@@ -453,16 +474,22 @@ function explicarReparto(r, apartar) {
   const sinPlata = filas.filter((x) => x.m === 0);
   const noAlcanzo = filas.some((x) => x.m < x.d.necesidad);
   return `
-    <p class="suave" style="margin-top:14px">Así se reparten los ${pesos(apartar)}: a cada cuenta según lo que le falta y los días que quedan para pagarla${noAlcanzo ? '. Como no alcanza para todo, las de prioridad alta van primero y el resto se reparte parejo' : ''}.</p>
+    <p class="suave" style="margin-top:14px">Así se reparten los ${pesos(apartar)}${r.primeroAhorro ? `: primero ${pesos(r.primeroAhorro)} a ahorro (${datos.ahorroPct}%), y el resto` : ''} a cada cuenta según lo que le falta y los días que quedan para pagarla${noAlcanzo ? '. Como no alcanza para todo, las de prioridad alta van primero y el resto se reparte parejo' : ''}.</p>
     <ul class="lista reparto">
       ${conPlata.map(({ o, d, m }) => `
         <li><span><b>${esc(o.nombre)}</b><br>
           <span class="suave">Faltan ${pesos(d.falta)} · vence ${fechaCorta(d.fecha)} · ${d.dias <= 1 ? 'ya se debe juntar' : `${d.dias} días de trabajo`} → necesita ${pesos(d.necesidad)} al día</span></span>
           <span class="monto">${pesos(m)}</span></li>`).join('')}
-      ${r.extra ? `<li><span><b>Ahorro extra</b><br><span class="suave">Todas las cuentas ya tienen lo suyo</span></span><span class="monto">${pesos(r.extra)}</span></li>` : ''}
+      ${Object.entries(r.ahorro || {}).map(([id, m]) => `
+        <li><span><b>💰 ${esc(buscarMeta(id)?.nombre || 'Ahorro')}</b><br><span class="suave">Ahorro${r.sobroDeCuentas ? ' (incluye lo que sobró: las cuentas ya tienen lo suyo de hoy)' : ''}</span></span><span class="monto">${pesos(m)}</span></li>`).join('')}
+      ${r.extra ? `<li><span><b>💰 Ahorro sin meta</b><br><span class="suave">${r.sobroDeCuentas ? 'Las cuentas ya tienen lo suyo de hoy. ' : ''}Cree metas en "Ahorro" para repartirlo</span></span><span class="monto">${pesos(r.extra)}</span></li>` : ''}
     </ul>
     ${sinPlata.length ? `<p class="suave">Hoy no reciben: ${sinPlata.map(({ o }) => esc(o.nombre)).join(', ')} (${sinPlata.every(({ o }) => (o.prioridad || 2) > 1) ? 'prioridad más baja: reciben cuando las importantes estén al día' : 'reciben en los próximos días'}).</p>` : ''}
-    <p class="suave">👉 Pase la plata al bolsillo de ahorro hoy mismo. Si se queda en la billetera, se gasta.</p>`;
+    ${(() => {
+      const movs = movimientosCajitas(r);
+      return movs.length ? `<div class="alerta verde">👉 Hoy mueva en ${esc(banco())}:
+        <ul class="lista" style="margin:6px 0 0">${movs.map(([k, m]) => `<li><span>a la cajita <b>${esc(k)}</b></span><span class="monto">${pesos(m)}</span></li>`).join('')}</ul></div>` : '';
+    })()}`;
 }
 
 /** Editar o borrar un día ya registrado (de hoy o de cualquier fecha). */
@@ -492,8 +519,9 @@ function editarRegistro(id) {
     const apartar = num(fd.get('apartar'));
     revertirReparto(r);
     if (apartar !== r.apartado) {
-      const nuevo = L.repartirDia(activas(), apartar, fd.get('fecha') || r.fecha, datos);
+      const nuevo = L.repartirTodo(activas(), metasActivas(), apartar, fd.get('fecha') || r.fecha, datos);
       r.reparto = nuevo.reparto;
+      r.ahorro = nuevo.ahorro;
       r.extra = nuevo.extra;
     }
     const { neto: _n, ...dia } = d;
@@ -538,11 +566,12 @@ function pantallaPagos(c) {
 
   c.innerHTML = `
     <div class="tarjeta">
-      <p class="suave">Plata apartada en total (debería estar en el bolsillo de ahorro)</p>
+      <p class="suave">Plata apartada para cuentas y ahorro (debería estar en las cajitas de ${esc(banco())})</p>
       <p class="cifra-m">${pesos(totalApartado)}</p>
       ${datos.extra ? `<p class="suave">De eso, ahorro extra (sin pago asignado): <b>${pesos(datos.extra)}</b>
         <button class="chico" id="btn-extra" style="margin-left:6px">Usar / ajustar</button></p>` : ''}
     </div>
+    ${tarjetaCuadre()}
     ${avisoPlan(p)}
     <button class="principal" id="btn-nuevo">+ Agregar un pago</button>
     <div class="rejilla">${lista.map((o) => {
@@ -585,18 +614,23 @@ function activarBotones(c) {
 
 function dialogoExtra() {
   abrirModal(`
-    <h2>Ahorro extra</h2>
-    <p class="suave">Plata apartada que no tiene un pago asignado. Puede pasarla a un pago o cambiar el valor si la usó.</p>
-    <label>Ahorro extra</label>${campoPesos('extra', datos.extra)}
-    <label>Pasar a un pago <span class="suave">(opcional)</span></label>
-    <select name="destino"><option value="">— No pasar —</option>${activas().map((o) => `<option value="${o.id}">${esc(o.nombre)}</option>`).join('')}</select>
+    <h2>Ahorro sin meta</h2>
+    <p class="suave">Plata apartada que no tiene destino. Puede pasarla a una meta o a una cuenta, o cambiar el valor si la usó.</p>
+    <label>Ahorro sin meta</label>${campoPesos('extra', datos.extra)}
+    <label>Pasar a <span class="suave">(opcional)</span></label>
+    <select name="destino"><option value="">— No pasar —</option>
+      ${metasActivas().length ? `<optgroup label="Metas de ahorro">${metasActivas().map((m) => `<option value="${m.id}">${esc(m.nombre)}</option>`).join('')}</optgroup>` : ''}
+      <optgroup label="Cuentas">${activas().map((o) => `<option value="${o.id}">${esc(o.nombre)}</option>`).join('')}</optgroup>
+    </select>
     <label>¿Cuánto pasar?</label>${campoPesos('pasar')}
     ${botonesModal()}
   `, (fd) => {
     let extra = num(fd.get('extra'));
     const destino = buscar(fd.get('destino'));
+    const meta = buscarMeta(fd.get('destino'));
     const pasar = Math.min(num(fd.get('pasar')), extra);
     if (destino && pasar) { destino.apartado += pasar; extra -= pasar; }
+    if (meta && pasar) { meta.ahorrado = (meta.ahorrado || 0) + pasar; extra -= pasar; }
     datos.extra = extra;
     guardar(); render();
   });
@@ -624,14 +658,16 @@ function dialogoPagar(id) {
 }
 
 /** Solo se puede deshacer el último pago de cada compromiso (vuelve todo como estaba). */
-const puedeDeshacer = (pg) => pg.antes && buscar(pg.obligacionId) &&
+const puedeDeshacer = (pg) => (pg.tipo === 'retiro' ? buscarMeta(pg.obligacionId) : pg.antes && buscar(pg.obligacionId)) &&
   datos.pagos.filter((x) => x.obligacionId === pg.obligacionId).pop() === pg;
 
 async function deshacerPago(id) {
   const pg = datos.pagos.find((x) => x.id === id);
   if (!pg || !puedeDeshacer(pg)) return;
-  if (!(await preguntar(`¿Deshacer el pago de ${pg.nombre} por ${pesos(pg.monto)}? Vuelve a quedar como antes de pagar.`, 'Deshacer'))) return;
-  Object.assign(buscar(pg.obligacionId), pg.antes);
+  const esRetiro = pg.tipo === 'retiro';
+  if (!(await preguntar(esRetiro ? `¿Deshacer lo que sacó de ${pg.nombre} (${pesos(pg.monto)})? La plata vuelve a la meta.` : `¿Deshacer el pago de ${pg.nombre} por ${pesos(pg.monto)}? Vuelve a quedar como antes de pagar.`, 'Deshacer'))) return;
+  if (esRetiro) { const m = buscarMeta(pg.obligacionId); m.ahorrado = (m.ahorrado || 0) + pg.monto; }
+  else Object.assign(buscar(pg.obligacionId), pg.antes);
   datos.pagos = datos.pagos.filter((x) => x.id !== id);
   marcarBorrado('pagos', id);
   guardar(); avisar('Pago deshecho'); render();
@@ -665,6 +701,7 @@ function editar(id) {
       <option value="3" ${o.prioridad === 3 ? 'selected' : ''}>Puede esperar</option>
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
+    ${campoCajita(o.bolsillo, CAJITA_CUENTAS)}
     <label>Nota <span class="suave">(opcional)</span></label>
     <input name="nota" value="${esc(o.nota)}" placeholder="Ej: número de contrato, a quién se le paga…" maxlength="160">
     ${botonesModal(!!id)}
@@ -688,6 +725,7 @@ function editar(id) {
       prioridad: Number(fd.get('prioridad')),
       saldoTotal: num(fd.get('saldo')) || null,
       nota: String(fd.get('nota') || '').trim(),
+      bolsillo: String(fd.get('bolsillo') || '').trim(),
     };
     if (tipo === 'unica') campos.fecha = fd.get('fecha');
     else campos.dia = Number(fd.get('dia'));
@@ -723,6 +761,223 @@ function editar(id) {
   });
 }
 
+/* ---------- CAJITAS (bolsillos en el banco, p. ej. Nu) ---------- */
+const CAJITA_CUENTAS = 'Cuentas por pagar';
+const banco = () => datos.banco || 'Nu';
+const cajitaDe = (x, esMeta) => (x && x.bolsillo) || (esMeta ? x.nombre : CAJITA_CUENTAS);
+
+/** Cuánto mover hoy a cada cajita, juntando lo que va a cuentas y a metas. */
+function movimientosCajitas(r) {
+  const t = {};
+  for (const [id, m] of Object.entries(r.reparto || {})) { const k = cajitaDe(buscar(id), false); t[k] = (t[k] || 0) + m; }
+  for (const [id, m] of Object.entries(r.ahorro || {})) { const k = cajitaDe(buscarMeta(id), true); t[k] = (t[k] || 0) + m; }
+  if (r.extra) t['Ahorro sin meta'] = (t['Ahorro sin meta'] || 0) + r.extra;
+  return Object.entries(t).filter(([, m]) => m > 0);
+}
+
+/** Cuánto debería haber en cada cajita del banco según lo apartado en la app. */
+function saldosCajitas() {
+  const t = {};
+  for (const o of activas()) if (o.apartado) { const k = cajitaDe(o, false); t[k] = (t[k] || 0) + o.apartado; }
+  for (const m of metasActivas()) if (m.ahorrado) { const k = cajitaDe(m, true); t[k] = (t[k] || 0) + m.ahorrado; }
+  if (datos.extra) t['Ahorro sin meta'] = (t['Ahorro sin meta'] || 0) + datos.extra;
+  return Object.entries(t).sort((a, b) => b[1] - a[1]);
+}
+
+function tarjetaCuadre() {
+  const filas = saldosCajitas();
+  if (!filas.length) return '';
+  const total = filas.reduce((s, [, m]) => s + m, 0);
+  return `
+    <div class="tarjeta">
+      <h3 style="margin:0 0 4px">Cuadre con ${esc(banco())}</h3>
+      <p class="suave">Lo que debería haber en cada cajita. Si no coincide, ajuste en la app o mueva la plata en ${esc(banco())}.</p>
+      <ul class="lista">${filas.map(([k, m]) => `<li><span>${esc(k)}</span><span class="monto">${pesos(m)}</span></li>`).join('')}
+        <li><span><b>Total</b></span><span class="monto">${pesos(total)}</span></li></ul>
+    </div>`;
+}
+
+/** Campo para escoger la cajita (con las que ya existen como sugerencia). */
+function campoCajita(valor, porDefecto) {
+  const usadas = [...new Set([CAJITA_CUENTAS, ...datos.obligaciones.map((o) => o.bolsillo), ...(datos.metas || []).map((m) => m.bolsillo || m.nombre)].filter(Boolean))];
+  return `<label>¿En qué cajita de ${esc(banco())} la guarda?</label>
+    <input name="bolsillo" list="lista-cajitas" value="${esc(valor || '')}" placeholder="${esc(porDefecto)}" maxlength="40">
+    <datalist id="lista-cajitas">${usadas.map((u) => `<option value="${esc(u)}">`).join('')}</datalist>
+    <p class="suave">Si lo deja vacío: "${esc(porDefecto)}".</p>`;
+}
+
+/* ---------- AHORRO (metas) ---------- */
+const metasActivas = () => (datos.metas || []).filter((m) => m.activa !== false);
+const buscarMeta = (id) => (datos.metas || []).find((m) => m.id === id);
+const pesoTotal = () => metasActivas().reduce((s, m) => s + (m.porcentaje || 0), 0);
+
+/** Promedio diario que ha recibido una meta en los últimos 30 días. */
+function ritmoMeta(m) {
+  const desde = L.sumarDias(hoy(), -29);
+  const total = datos.registros.filter((r) => r.fecha >= desde).reduce((s, r) => s + ((r.ahorro || {})[m.id] || 0), 0);
+  return total / 30;
+}
+
+function tarjetaMeta(m) {
+  const pct = m.objetivo > 0 ? Math.min(100, Math.round(((m.ahorrado || 0) / m.objetivo) * 100)) : null;
+  const parte = pesoTotal() ? Math.round(((m.porcentaje || 0) / pesoTotal()) * 100) : 0;
+  const ritmo = ritmoMeta(m);
+  let cuando = '';
+  if (m.objetivo > 0 && (m.ahorrado || 0) >= m.objetivo) cuando = '🎉 ¡Meta cumplida!';
+  else if (m.objetivo > 0 && ritmo > 0) {
+    const dias = Math.ceil((m.objetivo - (m.ahorrado || 0)) / ritmo);
+    cuando = `A este ritmo llega en ${dias < 60 ? `${dias} días` : `${Math.round(dias / 30)} meses`}`;
+  } else if (ritmo > 0) cuando = `Viene recibiendo unos ${pesos(ritmo * 30)} al mes`;
+  return `
+    <div class="tarjeta">
+      <div class="cabeza"><h3>${esc(m.nombre)}</h3><span class="chip al-dia">${parte}% del ahorro</span></div>
+      <p class="cifra-m">${pesos(m.ahorrado)}</p>
+      ${pct != null ? `<div class="barra-progreso"><div style="width:${pct}%"></div></div><p class="suave">${pct}% de ${pesos(m.objetivo)}</p>` : '<p class="suave">Sin meta de monto</p>'}
+      ${cuando ? `<p class="suave">${cuando}</p>` : ''}
+      ${m.nota ? `<p class="suave">📝 ${esc(m.nota)}</p>` : ''}
+      <div class="botones">
+        <button class="chico" data-sacar="${m.id}">Sacar plata</button>
+        <button class="chico" data-editar-meta="${m.id}">Editar</button>
+      </div>
+    </div>`;
+}
+
+function pantallaAhorro(c) {
+  const metas = metasActivas();
+  const total = metas.reduce((s, m) => s + (m.ahorrado || 0), 0) + (datos.extra || 0);
+  const pct = datos.ahorroPct || 0;
+  const cuota = datos.cuotaDiaria || 0;
+  const p = proyeccion();
+  c.innerHTML = `
+    <div class="tarjeta destacada">
+      <p class="suave">Ahorrado en total</p>
+      <p class="cifra">${pesos(total)}</p>
+      <p class="suave">Plata que no es para pagar cuentas: para emergencias y para invertir más adelante.</p>
+    </div>
+
+    <div class="rejilla">
+    <div>
+      <h2>¿Cuánto de lo de cada día va a ahorro?</h2>
+      <form class="tarjeta" id="form-pct">
+        <div class="dias" style="grid-template-columns:repeat(7,minmax(0,1fr))">${[0, 5, 10, 15, 20, 25, 30].map((n) =>
+          `<label><input type="radio" name="ahorroPct" value="${n}" ${n === pct ? 'checked' : ''}><span>${n}%</span></label>`).join('')}</div>
+        <p class="suave" style="margin-top:10px">${pct
+          ? `Se aparta primero, antes de las cuentas${cuota ? `: de ${pesos(cuota)} diarios, ${pesos(Math.round((cuota * pct) / 100 / 1000) * 1000)} van a ahorro` : ''}.`
+          : 'Hoy no se aparta nada primero para ahorro.'} Además, lo que sobre después de cubrir las cuentas siempre va a ahorro.</p>
+        ${pct && !p.alcanza ? `<div class="alerta ambar">Con este porcentaje las cuentas no alcanzan a cubrirse a tiempo (vea "Hoy"). Puede bajarlo mientras se pone al día.</div>` : ''}
+      </form>
+    </div>
+    <div>
+      <h2>Metas</h2>
+      ${!metas.length ? `<div class="tarjeta"><p>Todavía no hay metas. Puede empezar con dos:</p>
+        <ul class="lista"><li><span><b>Fondo de emergencias</b><br><span class="suave">Para imprevistos (un daño del carro, una enfermedad) sin endeudarse.</span></span></li>
+        <li><span><b>Para invertir</b><br><span class="suave">Plata que se va juntando para invertir más adelante.</span></span></li></ul>
+        <button class="principal" id="btn-sugeridas">Crear estas dos metas</button></div>` : ''}
+    </div>
+    </div>
+    <div class="rejilla">${metas.map(tarjetaMeta).join('')}</div>
+    <button class="principal" id="btn-nueva-meta">+ Agregar meta</button>
+    ${datos.extra ? `<div class="tarjeta"><p>Ahorro sin meta: <b>${pesos(datos.extra)}</b></p>
+      <button class="chico" id="btn-extra">Pasar a una meta o cuenta</button></div>` : ''}
+
+    ${tarjetaCuadre()}
+    <h2>Cómo usar las cajitas de ${esc(banco())}</h2>
+    <div class="tarjeta">
+      <ul class="lista">
+        <li><span>Cree en ${esc(banco())} una cajita <b>"${CAJITA_CUENTAS}"</b> y una por cada meta (por ejemplo "Fondo de emergencias" y "Para invertir").</span></li>
+        <li><span>Cada día, después de "Listo, ya lo aparté", haga en ${esc(banco())} los movimientos que dice la app.</span></li>
+        <li><span>Cuando pague un recibo, sáquelo de "${CAJITA_CUENTAS}" y marque "Ya pagué" en la app.</span></li>
+        <li><span>Si quiere una cajita por cada recibo (más orden, más movimientos), póngale el nombre en "Editar" de cada pago.</span></li>
+        <li><span>Una vez por semana compare el "Cuadre" de la app con lo que muestra ${esc(banco())}.</span></li>
+      </ul>
+    </div>
+
+    <h2>Antes de invertir</h2>
+    <div class="tarjeta">
+      <p class="suave">Ideas generales, no son una recomendación para su caso:</p>
+      <ul class="lista">
+        <li><span>Muchas guías de finanzas personales sugieren este orden: estar al día con las deudas que cobran intereses altos (como las tarjetas de crédito), luego tener un fondo de emergencias de varios meses de gastos, y después invertir.</span></li>
+        <li><span>Antes de meter plata en algo, pregunte: ¿qué tan riesgoso es?, ¿en cuánto tiempo la puedo sacar?, ¿cuánto cobran?</span></li>
+        <li><span>Verifique que la entidad esté vigilada por la Superintendencia Financiera de Colombia. Desconfíe de rendimientos "garantizados" muy altos.</span></li>
+        <li><span>Para decidir en qué invertir según su situación, consulte un asesor financiero certificado.</span></li>
+      </ul>
+    </div>`;
+
+  $('#form-pct').onchange = (e) => {
+    datos.ahorroPct = Number(new FormData(e.currentTarget).get('ahorroPct')) || 0;
+    guardar(); avisar('Guardado'); render();
+  };
+  if ($('#btn-sugeridas')) $('#btn-sugeridas').onclick = () => {
+    datos.metas = [
+      { id: nuevoId(), nombre: 'Fondo de emergencias', objetivo: null, ahorrado: 0, porcentaje: 50, nota: '', activa: true },
+      { id: nuevoId() + 'i', nombre: 'Para invertir', objetivo: null, ahorrado: 0, porcentaje: 50, nota: '', activa: true },
+    ];
+    guardar(); render();
+  };
+  $('#btn-nueva-meta').onclick = () => dialogoMeta(null);
+  if ($('#btn-extra')) $('#btn-extra').onclick = dialogoExtra;
+  $$('[data-editar-meta]', c).forEach((b) => (b.onclick = () => dialogoMeta(b.dataset.editarMeta)));
+  $$('[data-sacar]', c).forEach((b) => (b.onclick = () => dialogoSacar(b.dataset.sacar)));
+}
+
+function dialogoMeta(id) {
+  const m = id ? buscarMeta(id) : { nombre: '', objetivo: null, ahorrado: 0, porcentaje: 50, nota: '' };
+  abrirModal(`
+    <h2>${id ? 'Editar meta' : 'Nueva meta'}</h2>
+    <label>Nombre</label><input name="nombre" value="${esc(m.nombre)}" required placeholder="Ej: Para invertir">
+    <label>¿A cuánto quiere llegar? <span class="suave">(opcional)</span></label>${campoPesos('objetivo', m.objetivo)}
+    <label>¿Qué parte del ahorro va a esta meta? <span class="suave">(%)</span></label>
+    <input name="porcentaje" inputmode="numeric" maxlength="3" value="${m.porcentaje ?? 50}">
+    <p class="suave">Se compara con las otras metas: si dos metas tienen 50, cada una recibe la mitad.</p>
+    ${id ? `<label>Ya ahorrado</label>${campoPesos('ahorrado', m.ahorrado)}` : ''}
+    ${campoCajita(m.bolsillo, m.nombre || 'el nombre de la meta')}
+    <label>Nota <span class="suave">(opcional)</span></label><input name="nota" value="${esc(m.nota)}" maxlength="160">
+    ${botonesModal(!!id)}
+  `, (fd, boton) => {
+    if (boton && boton.value === 'borrar') {
+      preguntar(`¿Borrar la meta "${m.nombre}"? Lo ahorrado (${pesos(m.ahorrado)}) pasa a ahorro sin meta.`, 'Borrar').then((si) => {
+        if (!si) return;
+        datos.extra += m.ahorrado || 0;
+        datos.metas = datos.metas.filter((x) => x.id !== id);
+        marcarBorrado('metas', id);
+        $('#modal').close();
+        guardar(); render();
+      });
+      return false;
+    }
+    const campos = {
+      nombre: String(fd.get('nombre')).trim(),
+      objetivo: num(fd.get('objetivo')) || null,
+      porcentaje: Math.min(100, num(fd.get('porcentaje'))),
+      nota: String(fd.get('nota') || '').trim(),
+      bolsillo: String(fd.get('bolsillo') || '').trim(),
+    };
+    if (!campos.nombre) { avisar('Falta el nombre'); return false; }
+    if (id) Object.assign(m, campos, { ahorrado: num(fd.get('ahorrado')) });
+    else datos.metas.push({ id: nuevoId(), ahorrado: 0, activa: true, ...campos });
+    guardar(); render();
+  });
+}
+
+function dialogoSacar(id) {
+  const m = buscarMeta(id);
+  abrirModal(`
+    <h2>Sacar de: ${esc(m.nombre)}</h2>
+    <p class="suave">Hay ${pesos(m.ahorrado)}.</p>
+    <label>¿Cuánto sacó?</label>${campoPesos('monto')}
+    <label>¿Para qué? <span class="suave">(opcional)</span></label><input name="nota" maxlength="120" placeholder="Ej: arreglo del carro, inversión en…">
+    <label>Fecha</label><input type="date" name="fecha" value="${hoy()}" max="${hoy()}">
+    ${botonesModal(false, 'Sacar')}
+  `, (fd) => {
+    const monto = Math.min(num(fd.get('monto')), m.ahorrado || 0);
+    if (!monto) { avisar('Ponga cuánto sacó'); return false; }
+    m.ahorrado = (m.ahorrado || 0) - monto;
+    const nota = String(fd.get('nota') || '').trim();
+    datos.pagos.push({ id: nuevoId(), fecha: fd.get('fecha') || hoy(), obligacionId: m.id, nombre: m.nombre + (nota ? ` (${nota})` : ''), monto, tipo: 'retiro' });
+    guardar(); avisar(`Sacó ${pesos(monto)} de ${m.nombre}`); render();
+  });
+}
+
 /* ---------- HISTORIAL ---------- */
 function pantallaHistorial(c) {
   const f = hoy();
@@ -744,7 +999,7 @@ function pantallaHistorial(c) {
     })),
     ...datos.pagos.map((pg) => ({
       fecha: pg.fecha,
-      txt: `Pagó ${esc(pg.nombre)}`,
+      txt: pg.tipo === 'retiro' ? `Sacó del ahorro: ${esc(pg.nombre)}` : `Pagó ${esc(pg.nombre)}`,
       monto: `−${pesos(pg.monto)}`,
       boton: puedeDeshacer(pg) ? `<button class="chico" data-deshacer-pago="${pg.id}">Deshacer</button>` : '',
     })),
@@ -764,7 +1019,9 @@ function pantallaHistorial(c) {
       <li><span>Gasolina</span><span class="monto">${pesos(suma(delMes, 'gasolina'))}</span></li>
       <li><span>Otros gastos</span><span class="monto">${pesos(suma(delMes, 'otros'))}</span></li>
       <li><span>Apartó</span><span class="monto">${pesos(suma(delMes, 'apartado'))}</span></li>
-      <li><span>Pagó</span><span class="monto">${pesos(suma(datos.pagos.filter((x) => x.fecha.startsWith(mes)), 'monto'))}</span></li>
+      <li><span>Pagó cuentas</span><span class="monto">${pesos(suma(datos.pagos.filter((x) => x.fecha.startsWith(mes) && x.tipo !== 'retiro'), 'monto'))}</span></li>
+      <li><span>Ahorró</span><span class="monto">${pesos(delMes.reduce((s, r) => s + sumar(r.ahorro) + (r.extra || 0), 0))}</span></li>
+      <li><span>Sacó del ahorro</span><span class="monto">${pesos(suma(datos.pagos.filter((x) => x.fecha.startsWith(mes) && x.tipo === 'retiro'), 'monto'))}</span></li>
     </ul></div></div>
     </div>
     <h2>Movimientos</h2>
@@ -782,6 +1039,12 @@ function pantallaAjustes(c) {
     <div class="rejilla">
     <div><h2>Cuenta en la nube</h2>
     <div class="tarjeta" id="tarjeta-cuenta">${tarjetaCuenta()}</div>
+    <h2>Banco</h2>
+    <form class="tarjeta" id="form-banco">
+      <label>¿En qué banco o app guarda la plata?</label>
+      <input name="banco" value="${esc(banco())}" maxlength="30" placeholder="Nu">
+      <p class="suave">Se usa en los textos ("Hoy mueva en Nu…").</p>
+    </form>
     <h2>Cuota y días de trabajo</h2>
     <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form></div>
 
@@ -824,6 +1087,10 @@ function pantallaAjustes(c) {
     </div>`;
 
   activarCuenta();
+  $('#form-banco').onchange = (e) => {
+    datos.banco = String(new FormData(e.currentTarget).get('banco') || '').trim() || 'Nu';
+    guardar(); avisar('Guardado');
+  };
   $('#form-trabajo').onchange = (e) => {
     leerTrabajo(new FormData(e.currentTarget));
     guardar();
@@ -882,7 +1149,7 @@ function pantallaAjustes(c) {
       if (!Array.isArray(d.obligaciones)) throw new Error('formato');
       if (!(await preguntar('Esto reemplaza lo que hay en este teléfono por la copia. ¿Seguir?', 'Reemplazar'))) return;
       const nuevos = migrar(d);
-      for (const t of ['obligaciones', 'registros', 'pagos']) {
+      for (const t of ['obligaciones', 'registros', 'pagos', 'metas']) {
         const quedan = new Set(nuevos[t].map((x) => x.id));
         for (const x of datos[t]) if (!quedan.has(x.id)) nuevos.borrados[t].push(x.id);
       }
@@ -897,7 +1164,7 @@ function pantallaAjustes(c) {
   $('#btn-borrar').onclick = async () => {
     const msg = Nube.sesion ? '¿Seguro? Se borra todo lo registrado, en este teléfono Y en la nube.' : '¿Seguro? Se borra todo lo registrado en este teléfono.';
     if (!(await preguntar(msg, 'Borrar todo'))) return;
-    const borrados = { obligaciones: datos.obligaciones.map((x) => x.id), registros: datos.registros.map((x) => x.id), pagos: datos.pagos.map((x) => x.id) };
+    const borrados = { obligaciones: datos.obligaciones.map((x) => x.id), registros: datos.registros.map((x) => x.id), pagos: datos.pagos.map((x) => x.id), metas: (datos.metas || []).map((x) => x.id) };
     datos = estadoNuevo();
     datos.borrados = borrados;
     guardar();

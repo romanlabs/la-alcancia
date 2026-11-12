@@ -34,30 +34,39 @@ const Nube = (() => {
     dia: o.tipo === 'unica' ? null : (o.dia ?? null), fecha: o.fecha || null,
     monto: o.monto || 0, apartado: o.apartado || 0, prioridad: o.prioridad || 2,
     saldo_total: o.saldoTotal ?? null, inicio: o.inicio || null, proximo: o.proximo || null,
-    activa: o.activa !== false, nota: o.nota || '',
+    activa: o.activa !== false, nota: o.nota || '', bolsillo: o.bolsillo || '',
   });
   const deFilaObligacion = (f) => ({
     id: f.id, nombre: f.nombre, tipo: f.tipo, dia: f.dia ?? undefined, fecha: f.fecha || undefined,
     monto: num(f.monto), apartado: num(f.apartado), prioridad: f.prioridad,
     saldoTotal: f.saldo_total == null ? null : num(f.saldo_total),
-    inicio: f.inicio, proximo: f.proximo, activa: f.activa, nota: f.nota || '',
+    inicio: f.inicio, proximo: f.proximo, activa: f.activa, nota: f.nota || '', bolsillo: f.bolsillo || '',
   });
   const aFilaRegistro = (r, uid) => ({
     id: r.id, user_id: uid, fecha: r.fecha, ingresos: r.ingresos || {}, ingreso: r.ingreso || 0,
     gasolina: r.gasolina || 0, otros: r.otros || 0, carro: r.carro || 0, apartado: r.apartado || 0,
-    reparto: r.reparto || {}, extra: r.extra || 0, nota: r.nota || '',
+    reparto: r.reparto || {}, extra: r.extra || 0, nota: r.nota || '', ahorro: r.ahorro || {},
   });
   const deFilaRegistro = (f) => ({
     id: f.id, fecha: f.fecha, ingresos: f.ingresos || {}, ingreso: num(f.ingreso), gasolina: num(f.gasolina),
     otros: num(f.otros), carro: num(f.carro), apartado: num(f.apartado), reparto: f.reparto || {},
-    extra: num(f.extra), nota: f.nota || '',
+    extra: num(f.extra), nota: f.nota || '', ahorro: f.ahorro || {},
   });
   const aFilaPago = (p, uid) => ({
     id: p.id, user_id: uid, fecha: p.fecha, obligacion_id: p.obligacionId || null,
-    nombre: p.nombre || '', monto: p.monto || 0, antes: p.antes || null,
+    nombre: p.nombre || '', monto: p.monto || 0, antes: p.antes || null, tipo: p.tipo || 'pago',
   });
   const deFilaPago = (f) => ({
     id: f.id, fecha: f.fecha, obligacionId: f.obligacion_id, nombre: f.nombre, monto: num(f.monto), antes: f.antes || undefined,
+    tipo: f.tipo || 'pago',
+  });
+  const aFilaMeta = (m, uid) => ({
+    id: m.id, user_id: uid, nombre: m.nombre, objetivo: m.objetivo || null, ahorrado: m.ahorrado || 0,
+    porcentaje: m.porcentaje ?? 50, nota: m.nota || '', activa: m.activa !== false, bolsillo: m.bolsillo || '',
+  });
+  const deFilaMeta = (f) => ({
+    id: f.id, nombre: f.nombre, objetivo: f.objetivo == null ? null : num(f.objetivo), ahorrado: num(f.ahorrado),
+    porcentaje: f.porcentaje, nota: f.nota || '', activa: f.activa, bolsillo: f.bolsillo || '',
   });
 
   async function chequear(promesa) {
@@ -75,12 +84,14 @@ const Nube = (() => {
       await chequear(sb.from('configuracion').upsert({
         user_id: uid, configurado: !!datos.configurado, dias_semana: datos.diasSemana, margen: datos.margen,
         cuota_diaria: datos.cuotaDiaria || 0, fuentes: datos.fuentes, extra: datos.extra || 0,
+        ahorro_pct: datos.ahorroPct || 0, banco: datos.banco || 'Nu',
         actualizado: new Date().toISOString(),
       }));
       const tablas = [
         ['obligaciones', datos.obligaciones.map((o) => aFilaObligacion(o, uid))],
         ['registros', datos.registros.map((r) => aFilaRegistro(r, uid))],
         ['pagos', datos.pagos.map((p) => aFilaPago(p, uid))],
+        ['metas', (datos.metas || []).map((m) => aFilaMeta(m, uid))],
       ];
       for (const [tabla, filas] of tablas) {
         if (filas.length) await chequear(sb.from(tabla).upsert(filas));
@@ -109,15 +120,17 @@ const Nube = (() => {
     try {
       const [conf] = await chequear(sb.from('configuracion').select('*').limit(1));
       if (!conf) { poner('al-dia'); return null; }
-      const [obs, regs, pags] = await Promise.all([
+      const [obs, regs, pags, mets] = await Promise.all([
         chequear(sb.from('obligaciones').select('*')),
         chequear(sb.from('registros').select('*').order('fecha')),
         chequear(sb.from('pagos').select('*').order('fecha')),
+        chequear(sb.from('metas').select('*').order('actualizado')),
       ]);
       poner('al-dia');
       return {
         configurado: conf.configurado, diasSemana: conf.dias_semana, margen: conf.margen,
         cuotaDiaria: num(conf.cuota_diaria), fuentes: conf.fuentes, extra: num(conf.extra),
+        ahorroPct: conf.ahorro_pct || 0, metas: mets.map(deFilaMeta), banco: conf.banco || 'Nu',
         obligaciones: obs.map(deFilaObligacion), registros: regs.map(deFilaRegistro), pagos: pags.map(deFilaPago),
       };
     } catch (e) {

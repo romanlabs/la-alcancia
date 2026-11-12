@@ -13,6 +13,10 @@ Está pensada para ingresos diarios e irregulares (InDrive / Uber) y para pagos 
   Lo de cada día se reparte entre **todas** las cuentas: a cada una según lo que le falta ÷ los días de trabajo
   que quedan para pagarla. Si no alcanza, primero la prioridad alta y, dentro de ella, en proporción a lo que
   necesita cada una. La app muestra por qué le toca eso a cada cuenta. Si todo está cubierto, va a *ahorro extra*.
+- **Ahorro:** metas (p. ej. "Fondo de emergencias" y "Para invertir"). Un porcentaje de lo de cada día va
+  primero a ahorro y lo que sobre de las cuentas también; se reparte entre las metas según su porcentaje.
+- **Cajitas del banco (Nu):** cada cuenta y meta dice en qué cajita se guarda; cada día la app dice cuánto
+  mover a cada una, y el "Cuadre" muestra cuánto debería haber en cada cajita.
 - "Ya pagué el de este mes": para recibos que ya se pagaron por fuera; el próximo pasa al mes siguiente.
 - **Proyección (próximos 31 días):** simulando el mismo reparto día a día con esa cuota, los días que se trabajan por semana y el margen
   (tener la plata X días antes del pago), dice qué pagos no alcanzan, cuánto faltaría y qué cuota
@@ -35,6 +39,8 @@ La app **no mueve plata**. Lo apartado tiene que pasarse de verdad a un bolsillo
 |---|---|
 | `index.html`, `estilos.css`, `app.js` | Las pantallas |
 | `logica.js` | Los cálculos (fechas, cuotas, reparto, pagos), sin pantalla |
+| `nube.js` | Sincronización con Supabase (PostgreSQL) |
+| `supabase/*.sql` | Tablas y seguridad (RLS), en orden: 01, 02, 03 |
 | `pruebas/logica.test.js` | Pruebas de los cálculos |
 | `sw.js`, `manifest.webmanifest`, `icono.svg` | Para instalarla en el celular y que abra sin internet |
 

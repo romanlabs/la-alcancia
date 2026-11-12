@@ -301,6 +301,57 @@
     };
   }
 
+  /**
+   * Reparte `monto` entre las metas de ahorro según su porcentaje (peso).
+   * Las metas que ya llegaron a su objetivo no reciben; lo que no tenga a dónde ir queda en `sobra`.
+   */
+  function repartirMetas(metas, monto) {
+    const reparto = {};
+    let resto = Math.max(0, monto);
+    const abiertas = (metas || []).filter((m) => m.activa !== false && (m.porcentaje || 0) > 0);
+    // Varias vueltas: si una meta se llena, lo suyo pasa a las demás.
+    for (let vuelta = 0; vuelta < 5 && resto > 0; vuelta++) {
+      const vivas = abiertas.filter((m) => !(m.objetivo > 0) || (m.ahorrado || 0) + (reparto[m.id] || 0) < m.objetivo);
+      const peso = vivas.reduce((s, m) => s + m.porcentaje, 0);
+      if (!peso) break;
+      const base = resto;
+      let dado = 0;
+      vivas.forEach((m, i) => {
+        let parte = i === vivas.length - 1 ? base - dado : Math.floor((base * m.porcentaje) / peso / 1000) * 1000;
+        if (m.objetivo > 0) parte = Math.min(parte, m.objetivo - (m.ahorrado || 0) - (reparto[m.id] || 0));
+        parte = Math.max(0, parte);
+        if (parte) reparto[m.id] = (reparto[m.id] || 0) + parte;
+        dado += parte;
+      });
+      resto = base - dado;
+      if (!dado) break;
+    }
+    return { reparto, sobra: Math.max(0, resto) };
+  }
+
+  /**
+   * Reparto completo del día:
+   * 1) `ahorroPct` % va primero a ahorro ("páguese primero");
+   * 2) el resto, a las cuentas (repartirDia);
+   * 3) lo que sobre de las cuentas también va a ahorro;
+   * 4) el ahorro se divide entre las metas según su porcentaje. Si no hay metas, queda como ahorro extra.
+   */
+  function repartirTodo(obligaciones, metas, monto, hoy, cfg = {}) {
+    const pct = Math.min(100, Math.max(0, Number(cfg.ahorroPct) || 0));
+    const primeroAhorro = Math.min(monto, Math.round((monto * pct) / 100 / 1000) * 1000);
+    const cuentas = repartirDia(obligaciones, monto - primeroAhorro, hoy, cfg);
+    const totalAhorro = primeroAhorro + cuentas.extra;
+    const m = repartirMetas(metas, totalAhorro);
+    return {
+      reparto: cuentas.reparto,
+      detalle: cuentas.detalle,
+      ahorro: m.reparto,
+      extra: m.sobra,
+      primeroAhorro,
+      sobroDeCuentas: cuentas.extra,
+    };
+  }
+
   /** Si el recibo de este mes ya se pagó: el próximo es el del mes siguiente. */
   function proximaSiYaPagoEsteMes(hoy, dia) {
     const d = aFecha(hoy);
@@ -332,6 +383,7 @@
     aFecha, iso, sumarDias, diasEntre, fechaMensual, proximaMensual, siguienteMensual,
     proximaSemanal, diasProbables, ajustes, redondearMil, primeraFecha, cuotaDelDia, estado, repartir, pagar,
     siguienteFecha, instancias, plan, repartirDia, asignar, necesidadDiaria, simular, proximaSiYaPagoEsteMes,
+    repartirMetas, repartirTodo,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Logica;

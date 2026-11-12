@@ -215,3 +215,35 @@ test('ya pagó el recibo de este mes: el próximo es el del mes siguiente', () =
   assert.equal(L.proximaSiYaPagoEsteMes('2026-12-20', 31), '2027-01-31');
   assert.equal(L.proximaSiYaPagoEsteMes('2027-01-10', 31), '2027-02-28');
 });
+
+/* ---------- ahorro ---------- */
+test('repartirMetas: según el porcentaje de cada meta', () => {
+  const metas = [
+    { id: 'emergencia', porcentaje: 50, ahorrado: 0 },
+    { id: 'invertir', porcentaje: 50, ahorrado: 0 },
+  ];
+  assert.deepEqual(L.repartirMetas(metas, 10000), { reparto: { emergencia: 5000, invertir: 5000 }, sobra: 0 });
+  const r = L.repartirMetas([{ id: 'a', porcentaje: 70 }, { id: 'b', porcentaje: 30 }], 10000);
+  assert.deepEqual(r.reparto, { a: 7000, b: 3000 });
+});
+
+test('repartirMetas: una meta llena pasa lo suyo a las demás; sin metas, sobra', () => {
+  const metas = [
+    { id: 'emergencia', porcentaje: 50, ahorrado: 98000, objetivo: 100000 },
+    { id: 'invertir', porcentaje: 50, ahorrado: 0 },
+  ];
+  assert.deepEqual(L.repartirMetas(metas, 10000).reparto, { emergencia: 2000, invertir: 8000 });
+  assert.deepEqual(L.repartirMetas([], 10000), { reparto: {}, sobra: 10000 });
+});
+
+test('repartirTodo: primero el % de ahorro, luego cuentas, y lo que sobra de las cuentas también es ahorro', () => {
+  const obs = [ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 110000 })];
+  const metas = [{ id: 'invertir', porcentaje: 100, ahorrado: 0 }];
+  const r = L.repartirTodo(obs, metas, 40000, '2026-11-12', { diasSemana: 7, margen: 0, ahorroPct: 10 });
+  assert.equal(r.primeroAhorro, 4000);
+  assert.deepEqual(r.reparto, { luz: 10000 });          // a la luz solo le faltaban 10.000
+  assert.deepEqual(r.ahorro, { invertir: 30000 });      // 4.000 + 26.000 que sobraron
+  assert.equal(r.extra, 0);
+  const sinPct = L.repartirTodo(obs, metas, 40000, '2026-11-12', { diasSemana: 7, margen: 0 });
+  assert.equal(sinPct.primeroAhorro, 0);
+});
