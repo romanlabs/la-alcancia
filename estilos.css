@@ -304,3 +304,35 @@ label.check input { margin-top: 2px; }
   }
 }
 @keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
+
+/* ===== Vista más compacta y que se adapte a letra grande / pantallas angostas ===== */
+body { font-size: 1.125rem; } /* respeta el tamaño de letra del celular (antes era fijo en px) */
+.pestanas { gap: 2px; padding-left: 4px; padding-right: 4px; }
+.pestanas button {
+  flex: 1 1 0; min-width: 0; max-width: 140px; padding: 6px 2px; min-height: 52px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; line-height: 1.1;
+}
+.pestanas .ico { font-size: 1.15rem; }
+.pestanas .txt { font-size: .72rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+.tarjeta.compacta { padding: 14px; }
+.tarjeta.compacta p { margin: 4px 0; }
+.tarjeta.compacta .barra-progreso { margin: 6px 0 2px; height: 8px; }
+.tarjeta.compacta .botones { margin-top: 8px; }
+.linea-monto { font-size: 1.05rem; }
+.etiquetas { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.etiquetas:empty { display: none; }
+.etiqueta { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--fondo); border: 1px solid var(--borde); color: var(--suave); }
+.nota { font-size: .85rem; }
+.cabeza h3 { line-height: 1.25; }
+.chip { flex-shrink: 0; }
+
+@media (max-width: 340px) {
+  main, .barra, .perfiles { padding-left: 10px; padding-right: 10px; }
+  .tarjeta { padding: 12px; border-radius: 12px; }
+  .cifra { font-size: 1.9rem; }
+  .cifra-m { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; }
+  .botones button.chico { flex: 1 1 auto; }
+}

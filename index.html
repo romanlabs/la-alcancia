@@ -9,7 +9,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icono.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icono.svg">
-  <link rel="stylesheet" href="estilos.css?v=20">
+  <link rel="stylesheet" href="estilos.css?v=21">
 </head>
 <body>
   <header class="barra">
@@ -21,11 +21,11 @@
   <main id="contenido"></main>
 
   <nav class="pestanas" id="pestanas" hidden>
-    <button data-vista="hoy">Hoy</button>
-    <button data-vista="sobres">Pagos</button>
-    <button data-vista="ahorro">Ahorro</button>
-    <button data-vista="historial">Historial</button>
-    <button data-vista="ajustes">Ajustes</button>
+    <button data-vista="hoy"><span class="ico" aria-hidden="true">🏠</span><span class="txt">Hoy</span></button>
+    <button data-vista="sobres"><span class="ico" aria-hidden="true">🧾</span><span class="txt">Pagos</span></button>
+    <button data-vista="ahorro"><span class="ico" aria-hidden="true">💰</span><span class="txt">Ahorro</span></button>
+    <button data-vista="historial"><span class="ico" aria-hidden="true">🕘</span><span class="txt">Historial</span></button>
+    <button data-vista="ajustes"><span class="ico" aria-hidden="true">⚙️</span><span class="txt">Ajustes</span></button>
   </nav>
 
   <dialog id="modal"><form method="dialog" id="modal-form"></form></dialog>
@@ -36,8 +36,8 @@
   <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
-  <script src="logica.js?v=20"></script>
-  <script src="nube.js?v=20"></script>
-  <script src="app.js?v=20"></script>
+  <script src="logica.js?v=21"></script>
+  <script src="nube.js?v=21"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

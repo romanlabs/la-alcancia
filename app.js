@@ -821,15 +821,17 @@ function pantallaPagos(c) {
       const cada = o.tipo === 'mensual' ? `cada mes el ${o.dia}` : o.tipo === 'semanal' ? `cada ${DIAS[o.dia]}`
         : o.tipo === 'anual' ? `cada año (${L.aFecha(o.proximo).toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })})` : 'una sola vez';
       return `
-      <div class="tarjeta">
+      <div class="tarjeta compacta">
         <div class="cabeza"><h3>${esc(o.nombre)}</h3><span class="chip ${est}">${ETIQUETA[est]}</span></div>
-        <p class="suave">${o.variable ? '≈ ' : ''}${pesos(o.monto)} · ${cada}</p>
-        ${o.variable ? '<p class="suave">💡 El valor puede cambiar: cuando llegue el recibo o el cobro, actualícelo en "Editar".</p>' : ''}
-        <p>Próximo pago: <b>${fechaCorta(o.proximo)}</b> (${cuandoVence(o.proximo)})</p>
+        <p class="linea-monto"><b>${o.variable ? '≈ ' : ''}${pesos(o.monto)}</b> <span class="suave">· ${cada}</span></p>
+        <p class="suave">Vence <b>${fechaCorta(o.proximo)}</b> · ${cuandoVence(o.proximo)}</p>
         <div class="barra-progreso"><div style="width:${pct}%"></div></div>
-        <p><b>${pesos(o.apartado)}</b> apartados de ${pesos(o.monto)}</p>
-        ${o.saldoTotal != null ? `<p class="suave">Deuda total que queda: <b>${pesos(o.saldoTotal)}</b></p>` : ''}
-        ${o.nota ? `<p class="suave">📝 ${esc(o.nota)}</p>` : ''}
+        <p class="suave">${pesos(o.apartado)} apartados${o.saldoTotal != null ? ` · deuda que queda <b>${pesos(o.saldoTotal)}</b>` : ''}</p>
+        <div class="etiquetas">
+          ${o.conTarjeta ? '<span class="etiqueta">💳 tarjeta</span>' : ''}
+          ${o.variable ? '<span class="etiqueta" title="El valor cambia: actualícelo cuando llegue el recibo">≈ valor variable</span>' : ''}
+        </div>
+        ${o.nota ? `<p class="suave nota">📝 ${esc(o.nota)}</p>` : ''}
         ${lineaPlan(o, p.faltantes)}
         <div class="botones">
           <button class="chico" data-pagar="${o.id}">Ya pagué</button>
