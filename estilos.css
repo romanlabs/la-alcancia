@@ -201,3 +201,27 @@ dialog .acciones button { flex: 1; margin: 0; width: auto; }
   .rejilla { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 dialog .acciones button { flex: 1 1 0; min-width: 0; padding-left: 8px; padding-right: 8px; }
+
+/* ---- Casillas parejas ---- */
+/* Campos lado a lado: misma columna, misma altura, alineados abajo */
+.fila { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.fila > * { min-width: 0; }
+.fila label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 340px) { .fila { grid-template-columns: 1fr; gap: 0; } }
+
+/* Días de descanso: 7 botones iguales en una fila */
+.dias { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.dias label {
+  position: relative; margin: 0; padding: 0; min-height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: .9rem; cursor: pointer; user-select: none;
+  border: 2px solid var(--borde); background: var(--fondo); color: var(--suave);
+}
+.dias input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.dias label:has(input:checked) { background: var(--verde); border-color: var(--verde); color: #fff; }
+.dias label:has(input:focus-visible) { outline: 3px solid var(--verde); outline-offset: 2px; }
+@media (prefers-color-scheme: dark) { .dias label:has(input:checked) { color: #0f1f17; } }
+@media (max-width: 340px) { .dias { gap: 4px; } .dias label { font-size: .8rem; } }
+
+/* Nombre editable de cada pago en la configuración: parece título */
+.rejilla .tarjeta > input:first-child { font-size: 1.05rem; font-weight: 700; min-height: 46px; }

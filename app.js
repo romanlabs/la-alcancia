@@ -3,6 +3,7 @@ const L = window.Logica;
 const CLAVE = 'la-alcancia-v1';
 const CLAVE_PIN = 'la-alcancia-clave';
 const MINUTOS_BLOQUEO = 5;
+const CORTOS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 const PLANTILLA = [
@@ -15,8 +16,8 @@ const PLANTILLA = [
   { nombre: 'Colegio', tipo: 'mensual', prioridad: 1, deuda: true,
     ayuda: 'La cuota del mes. Si hay una deuda atrasada, ponga el total abajo.' },
   { nombre: 'Mercado', tipo: 'semanal', prioridad: 1, ayuda: 'Lo de la semana y el día en que hace mercado.' },
-  { nombre: 'Fondo del carro (aceite, llantas, arreglos)', tipo: 'mensual', prioridad: 2,
-    ayuda: 'Una platica fija cada mes, para que el próximo daño no sea otra deuda.' },
+  { nombre: 'Fondo del carro', tipo: 'mensual', prioridad: 2,
+    ayuda: 'Aceite, llantas, arreglos: una platica fija cada mes para que el próximo daño no sea otra deuda.' },
 ];
 
 /* ---------- utilidades ---------- */
@@ -145,24 +146,24 @@ function render() {
 /* ---------- primera vez ---------- */
 function filaPlantilla(p, i) {
   const cuando = p.tipo === 'semanal'
-    ? `<label>¿Qué día de la semana?</label><select name="dia-${i}">${DIAS.map((d, n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${d}</option>`).join('')}</select>`
-    : `<label>¿Qué día del mes se paga?</label><input name="dia-${i}" inputmode="numeric" placeholder="Ej: 15" maxlength="2">`;
+    ? `<label>Día de la semana</label><select name="dia-${i}">${DIAS.map((d, n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${d}</option>`).join('')}</select>`
+    : `<label>Día de pago</label><input name="dia-${i}" inputmode="numeric" placeholder="1 a 31" maxlength="2">`;
   return `
     <div class="tarjeta">
       <input name="nombre-${i}" value="${esc(p.nombre)}" aria-label="Nombre" style="font-weight:700">
       ${p.ayuda ? `<p class="suave">${esc(p.ayuda)}</p>` : ''}
       <div class="fila">
-        <div><label>${p.tipo === 'semanal' ? '¿Cuánto a la semana?' : '¿Cuánto es?'}</label>${campoPesos('monto-' + i)}</div>
+        <div><label>${p.tipo === 'semanal' ? 'Valor semanal' : 'Valor'}</label>${campoPesos('monto-' + i)}</div>
         <div>${cuando}</div>
       </div>
-      ${p.deuda ? `<label>¿Cuánto se debe en total? <span class="suave">(opcional)</span></label>${campoPesos('saldo-' + i)}` : ''}
+      ${p.deuda ? `<label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo-' + i)}` : ''}
       <input type="hidden" name="tipo-${i}" value="${p.tipo}"><input type="hidden" name="prio-${i}" value="${p.prioridad}">
     </div>`;
 }
 
 function selectorDescanso(nombre = 'descanso') {
   return `<div class="dias">${DIAS.map((d, n) =>
-    `<label><input type="checkbox" name="${nombre}" value="${n}" ${datos.descanso.includes(n) ? 'checked' : ''}>${d}</label>`).join('')}</div>`;
+    `<label title="${d}"><input type="checkbox" name="${nombre}" value="${n}" ${datos.descanso.includes(n) ? 'checked' : ''}><span>${CORTOS[n]}</span></label>`).join('')}</div>`;
 }
 
 function pantallaInicio(c) {
