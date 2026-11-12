@@ -225,3 +225,17 @@ dialog .acciones button { flex: 1 1 0; min-width: 0; padding-left: 8px; padding-
 
 /* Nombre editable de cada pago en la configuración: parece título */
 .rejilla .tarjeta > input:first-child { font-size: 1.05rem; font-weight: 700; min-height: 46px; }
+
+/* Fuentes de ingreso (Ajustes) */
+.fila-quitar { display: flex; gap: 8px; margin-top: 8px; }
+.fila-quitar input { flex: 1; min-width: 0; }
+.fila-quitar button { flex: 0 0 auto; width: 50px; }
+/* Movimientos del historial: monto y botón a la derecha */
+.lista .derecha { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.alerta .lista li { border-color: rgba(0,0,0,.08); padding: 4px 0; }
+
+/* Confirmación propia (reemplaza la ventana del navegador) */
+dialog.confirmar { max-width: 420px; }
+dialog.confirmar p { font-size: 1.05rem; font-weight: 600; margin: 4px 0 0; }
+@media (max-width: 599px) { dialog.confirmar { max-height: none; } }
+button.peligro-fuerte { background: var(--rojo); color: #fff; }

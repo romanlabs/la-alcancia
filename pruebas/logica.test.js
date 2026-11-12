@@ -132,3 +132,60 @@ test('estado', () => {
   assert.equal(L.estado(base({ apartado: 90000 }), '2026-11-22'), 'vence-hoy');
   assert.equal(L.estado(base({ apartado: 90000 }), '2026-11-23'), 'vencida');
 });
+
+/* ---------- cuota diaria fija ---------- */
+const ob = (x) => ({ id: x.id, nombre: x.id, tipo: 'mensual', prioridad: 1, apartado: 0, saldoTotal: null, inicio: '2026-11-12', ...x });
+
+test('instancias: incluye las que se repiten en el mes y pasa lo apartado de más', () => {
+  const mercado = ob({ id: 'mercado', tipo: 'semanal', dia: 6, monto: 100000, proximo: '2026-11-14', apartado: 130000 });
+  const xs = L.instancias([mercado], '2026-11-12', 31);
+  assert.deepEqual(xs.map((x) => [x.fecha, x.falta]), [
+    ['2026-11-21', 70000], // la del 14 está cubierta y sobran 30.000 para la del 21
+    ['2026-11-28', 100000], ['2026-12-05', 100000], ['2026-12-12', 100000],
+  ]);
+});
+
+test('instancias: la deuda total limita las cuotas', () => {
+  const t = ob({ id: 't', dia: 20, monto: 300000, proximo: '2026-11-20', saldoTotal: 400000 });
+  const xs = L.instancias([t], '2026-11-12', 40);
+  assert.deepEqual(xs.map((x) => x.falta), [300000, 100000]);
+});
+
+test('plan: con 40.000 diarios avisa qué no alcanza y cuánto se necesitaría', () => {
+  const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 31 };
+  const obs = [
+    ob({ id: 'luz', dia: 15, monto: 120000, proximo: '2026-11-15' }),      // 3 días → 120.000 ✔
+    ob({ id: 'tarjeta', dia: 20, monto: 300000, proximo: '2026-11-20' }),  // 8 días → 320.000 − 120.000 = 200.000 ✗ faltan 100.000
+  ];
+  const p = L.plan(obs, '2026-11-12', cfg);
+  const luz = p.items.find((x) => x.id === 'luz' && x.primera);
+  const tarjeta = p.items.find((x) => x.id === 'tarjeta' && x.primera);
+  assert.equal(luz.faltante, 0);
+  assert.equal(tarjeta.faltante, 100000);
+  assert.equal(p.alcanza, false);
+  assert.equal(p.necesaria, 53000); // 420.000 / 8 = 52.500 → 53.000
+});
+
+test('plan: si alcanza, todo queda cubierto', () => {
+  const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 20 };
+  const p = L.plan([ob({ id: 'luz', dia: 22, monto: 120000, proximo: '2026-11-22' })], '2026-11-12', cfg);
+  assert.equal(p.alcanza, true);
+  assert.equal(p.necesaria, 12000);
+});
+
+test('plan: lo que ya se apartó hoy no cuenta dos veces', () => {
+  const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 31 };
+  // paga mañana 80.000; hoy ya apartó 40.000 (ya sumado en apartado) → falta 40.000 y no queda capacidad hoy
+  const p = L.plan([ob({ id: 'x', dia: 13, monto: 80000, proximo: '2026-11-13', apartado: 40000 })], '2026-11-12', cfg, 40000);
+  assert.equal(p.items[0].faltante, 40000);
+});
+
+test('repartirDia: primero lo que vence antes; lo que sobra es ahorro extra', () => {
+  const obs = [
+    ob({ id: 'colegio', monto: 450000, proximo: '2026-12-05' }),
+    ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 100000 }),
+  ];
+  assert.deepEqual(L.repartirDia(obs, 40000), { reparto: { luz: 20000, colegio: 20000 }, extra: 0 });
+  const cubiertas = [ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 120000 })];
+  assert.deepEqual(L.repartirDia(cubiertas, 40000), { reparto: {}, extra: 40000 });
+});

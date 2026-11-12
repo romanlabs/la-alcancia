@@ -9,13 +9,15 @@ Está pensada para ingresos diarios e irregulares (InDrive / Uber) y para pagos 
 ## Cómo funciona
 
 - Cada pago tiene un valor, una fecha (cada mes, cada semana o una sola vez) y lo que ya se ha apartado.
-- **Cuota del día** = lo que falta ÷ los días que *probablemente* se trabajen antes de la meta.
-  - Se configura cuántos días se trabaja a la semana, más o menos (los días varían; un imprevisto no rompe nada).
-  - **Margen:** la meta es tener la plata lista X días *antes* del pago, como colchón.
-  - Si un día no se trabaja, no se registra nada: lo que faltó se reparte solo en los días siguientes.
-- Al registrar el día (lo que entró − gasolina/carro), la app propone cuánto apartar y lo reparte:
-  primero lo que vence antes y, si hay empate, lo más grave.
-- Si no alcanza, lo dice claramente ("faltaron $X") y lo reparte en los días siguientes.
+- **Cuota diaria fija** (por defecto $40.000, editable; en $0 la calcula la app).
+  Lo apartado se reparte entre los pagos: primero lo que vence antes; si todo está cubierto, va a *ahorro extra*.
+- **Proyección (próximos 31 días):** con esa cuota, los días que se trabajan por semana y el margen
+  (tener la plata X días antes del pago), dice qué pagos no alcanzan, cuánto faltaría y qué cuota
+  diaria cubriría todo a tiempo. También muestra lo que necesita un mes normal, sin atrasos.
+- Un día que no se trabaja no se registra; la proyección se ajusta sola.
+- Fuentes de ingreso configurables (InDrive, Uber…), gasolina y otros gastos por separado, y nota por día.
+- Todo se puede corregir: editar o borrar cualquier día, deshacer el último pago de cada compromiso,
+  cambiar la próxima fecha de pago, mover el ahorro extra a un pago.
 - Al pagar, lo apartado se descuenta y el pago pasa solo a la fecha siguiente.
 - **Deuda total** (opcional): para la tarjeta o el colegio. Baja con cada pago; cuando llega a cero, el pago queda terminado
   (la última cuota se ajusta sola).

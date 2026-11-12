@@ -30,6 +30,7 @@ const hoy = () => L.iso(new Date());
 const nuevoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const fechaLarga = (f) => L.aFecha(f).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
 const fechaCorta = (f) => L.aFecha(f).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+const sumar = (obj) => Object.values(obj || {}).reduce((s, n) => s + (Number(n) || 0), 0);
 
 function cuandoVence(f) {
   const d = L.diasEntre(hoy(), f);
@@ -39,12 +40,12 @@ function cuandoVence(f) {
   return `en ${d} días`;
 }
 
-const ETIQUETA = { cubierta: 'Lista ✔', 'al-dia': 'Al día', atrasada: 'Atrasada', 'vence-hoy': 'Vence hoy', vencida: 'Vencida', terminada: 'Terminada' };
+const ETIQUETA = { cubierta: 'Lista ✔', 'al-dia': 'Va bien', atrasada: 'No alcanza', 'vence-hoy': 'Vence hoy', vencida: 'Vencida', terminada: 'Terminada' };
 
 /* Campos de plata: muestran puntos de miles mientras se escribe */
 function campoPesos(nombre, valor = '', extra = '') {
   const v = valor ? Number(valor).toLocaleString('es-CO') : '';
-  return `<input name="${nombre}" inputmode="numeric" autocomplete="off" placeholder="$ 0" value="${v ? '$ ' + v : ''}" data-pesos ${extra}>`;
+  return `<input name="${esc(nombre)}" inputmode="numeric" autocomplete="off" placeholder="$ 0" value="${v ? '$ ' + v : ''}" data-pesos ${extra}>`;
 }
 document.addEventListener('input', (e) => {
   if (!e.target.matches('[data-pesos]')) return;
@@ -62,13 +63,28 @@ function avisar(texto) {
 
 /* ---------- datos ---------- */
 function estadoNuevo() {
-  return { version: 2, configurado: false, diasSemana: 6, margen: 2, obligaciones: [], registros: [], pagos: [] };
+  return {
+    version: 3, configurado: false,
+    diasSemana: 6, margen: 2, cuotaDiaria: 40000,
+    fuentes: ['InDrive'], extra: 0,
+    obligaciones: [], registros: [], pagos: [],
+  };
 }
-/** Datos viejos (con días fijos de descanso) pasan a "días por semana". */
+/** Pone al día datos guardados con versiones anteriores de la app. */
 function migrar(d) {
   const n = { ...estadoNuevo(), ...d };
   if (d.diasSemana == null && Array.isArray(d.descanso)) n.diasSemana = Math.max(1, 7 - d.descanso.length);
   delete n.descanso;
+  if (!Array.isArray(n.fuentes) || !n.fuentes.length) n.fuentes = ['InDrive'];
+  n.registros = (n.registros || []).map((r) => ({
+    ingresos: r.ingresos || { Total: r.ingreso || 0 },
+    gasolina: r.gasolina ?? (r.carro || 0),
+    otros: r.otros || 0,
+    extra: r.extra || 0,
+    nota: r.nota || '',
+    ...r,
+  }));
+  n.version = 3;
   return n;
 }
 function cargar() {
@@ -94,37 +110,48 @@ const buscar = (id) => datos.obligaciones.find((o) => o.id === id);
 
 function crearObligacion(campos) {
   const f = hoy();
-  const o = {
-    id: nuevoId(), activa: true, apartado: 0, prioridad: 2, saldoTotal: null, inicio: f, ...campos,
-  };
-  o.proximo = L.primeraFecha(o, f);
+  const o = { id: nuevoId(), activa: true, apartado: 0, prioridad: 2, saldoTotal: null, inicio: f, ...campos };
+  o.proximo = campos.proximo || L.primeraFecha(o, f);
   return o;
 }
 
-/** Lo que ya se apartó hoy para cada compromiso. */
-function aportesDe(fecha) {
-  const t = {};
-  for (const r of datos.registros) {
-    if (r.fecha !== fecha) continue;
-    for (const [id, m] of Object.entries(r.reparto)) t[id] = (t[id] || 0) + m;
-  }
-  return t;
+const apartadoDelDia = (fecha) => datos.registros.filter((r) => r.fecha === fecha).reduce((s, r) => s + r.apartado, 0);
+
+/** Proyección con la cuota diaria (o la necesaria, si la cuota está en automático). */
+function proyeccion() {
+  const f = hoy();
+  const ya = apartadoDelDia(f);
+  let p = L.plan(activas(), f, datos, ya);
+  const automatica = !datos.cuotaDiaria;
+  if (automatica) p = L.plan(activas(), f, { ...datos, cuotaDiaria: p.necesaria }, ya);
+  const objetivo = automatica ? p.necesaria : datos.cuotaDiaria;
+  const faltantes = {};
+  for (const x of p.items) if (x.primera) faltantes[x.id] = x.faltante;
+  return { ...p, automatica, objetivo, ya, pendienteHoy: Math.max(0, objetivo - ya), faltantes };
 }
 
-/** Para cada compromiso activo: cuota de hoy y cuánto falta apartar de ella. */
-function cuentasDeHoy() {
-  const f = hoy();
-  const aportes = aportesDe(f);
-  return activas().map((o) => {
-    const ya = aportes[o.id] || 0;
-    const alEmpezarElDia = { ...o, apartado: Math.max(0, o.apartado - ya) };
-    const cuota = L.cuotaDelDia(alEmpezarElDia, f, datos);
-    return {
-      o, ya, cuota,
-      pendiente: Math.max(0, cuota - ya),
-      falta: Math.max(0, o.monto - o.apartado),
-    };
-  });
+/** Estado de un pago según la proyección: va bien / no alcanza / lista / vence / vencida. */
+function estadoDe(o, f, faltantes) {
+  const e = L.estado(o, f);
+  if (e === 'al-dia' || e === 'atrasada') return faltantes[o.id] > 0 ? 'atrasada' : 'al-dia';
+  return e;
+}
+
+/* ---------- registros del día (aplicar / revertir) ---------- */
+function aplicarReparto(r) {
+  for (const [id, m] of Object.entries(r.reparto || {})) {
+    const o = buscar(id);
+    if (o) o.apartado += m;
+    else datos.extra += m; // el pago ya no existe: la plata queda como ahorro extra
+  }
+  datos.extra += r.extra || 0;
+}
+function revertirReparto(r) {
+  for (const [id, m] of Object.entries(r.reparto || {})) {
+    const o = buscar(id);
+    if (o) o.apartado = Math.max(0, o.apartado - m);
+  }
+  datos.extra = Math.max(0, datos.extra - (r.extra || 0));
 }
 
 /* ---------- navegación ---------- */
@@ -149,24 +176,37 @@ function render() {
   ({ hoy: pantallaHoy, sobres: pantallaPagos, historial: pantallaHistorial, ajustes: pantallaAjustes }[vista] || pantallaHoy)(c);
 }
 
-/* ---------- primera vez ---------- */
-function filaPlantilla(p, i) {
-  const cuando = p.tipo === 'semanal'
-    ? `<label>Día de la semana</label><select name="dia-${i}">${DIAS.map((d, n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${d}</option>`).join('')}</select>`
-    : `<label>Día de pago</label><input name="dia-${i}" inputmode="numeric" placeholder="1 a 31" maxlength="2">`;
-  return `
-    <div class="tarjeta">
-      <input name="nombre-${i}" value="${esc(p.nombre)}" aria-label="Nombre" style="font-weight:700">
-      ${p.ayuda ? `<p class="suave">${esc(p.ayuda)}</p>` : ''}
-      <div class="fila">
-        <div><label>${p.tipo === 'semanal' ? 'Valor semanal' : 'Valor'}</label>${campoPesos('monto-' + i)}</div>
-        <div>${cuando}</div>
-      </div>
-      ${p.deuda ? `<label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo-' + i)}` : ''}
-      <input type="hidden" name="tipo-${i}" value="${p.tipo}"><input type="hidden" name="prio-${i}" value="${p.prioridad}">
-    </div>`;
+function abrirModal(html, alEnviar, alAbrir) {
+  const modal = $('#modal');
+  const form = $('#modal-form');
+  form.innerHTML = html;
+  form.onsubmit = (e) => {
+    if (e.submitter && e.submitter.value === 'cancelar') return;
+    e.preventDefault();
+    if (alEnviar(new FormData(form), e.submitter) !== false) modal.close();
+  };
+  if (alAbrir) alAbrir(form);
+  modal.showModal();
 }
+/** Confirmación con el estilo de la app (en vez de la ventana del navegador). */
+function preguntar(mensaje, si = 'Sí') {
+  const d = $('#confirmar');
+  $('#confirmar-texto').textContent = mensaje;
+  $('#confirmar-si').textContent = si;
+  d.returnValue = '';
+  d.showModal();
+  return new Promise((resolver) => {
+    d.onclose = () => resolver(d.returnValue === 'si');
+  });
+}
+const botonesModal = (borrar = false, guardarTxt = 'Guardar') => `
+  <div class="botones acciones">
+    <button value="cancelar" formnovalidate>Cancelar</button>
+    ${borrar ? '<button value="borrar" class="peligro" formnovalidate>Borrar</button>' : ''}
+    <button value="guardar" class="principal">${guardarTxt}</button>
+  </div>`;
 
+/* ---------- configuración (inicio y ajustes) ---------- */
 function botonesNumero(nombre, desde, hasta, actual) {
   const opciones = [];
   for (let n = desde; n <= hasta; n++) opciones.push(n);
@@ -174,9 +214,11 @@ function botonesNumero(nombre, desde, hasta, actual) {
     `<label><input type="radio" name="${nombre}" value="${n}" ${n === actual ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div>`;
 }
 
-/** Preguntas de cómo se trabaja (en la configuración inicial y en Ajustes). */
 function preguntasTrabajo() {
   return `
+    <label>¿Cuánto quiere apartar cada día que trabaja?</label>
+    ${campoPesos('cuotaDiaria', datos.cuotaDiaria)}
+    <p class="suave">La app reparte esa plata entre los pagos, primero lo que vence antes, y le avisa si no alcanza. Deje en $0 para que la app calcule cuánto hace falta.</p>
     <label>¿Cuántos días trabaja a la semana, más o menos?</label>
     ${botonesNumero('diasSemana', 1, 7, datos.diasSemana)}
     <p class="suave">Si a veces falla por un imprevisto, ponga un número más bajo. Mejor que sobre a que falte.</p>
@@ -188,22 +230,49 @@ function leerTrabajo(fd) {
   const cfg = L.ajustes({ diasSemana: fd.get('diasSemana'), margen: fd.get('margen') });
   datos.diasSemana = cfg.diasSemana;
   datos.margen = cfg.margen;
+  if (fd.has('cuotaDiaria')) datos.cuotaDiaria = num(fd.get('cuotaDiaria'));
+}
+
+function filaPago(p, i) {
+  const cuando = p.tipo === 'semanal'
+    ? `<label>Día de la semana</label><select name="dia-${i}">${DIAS.map((d, n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${d}</option>`).join('')}</select>`
+    : `<label>Día de pago</label><input name="dia-${i}" inputmode="numeric" placeholder="1 a 31" maxlength="2">`;
+  return `
+    <div class="tarjeta" data-fila="${i}">
+      <input name="nombre-${i}" value="${esc(p.nombre)}" aria-label="Nombre" placeholder="Nombre del pago" style="font-weight:700">
+      ${p.ayuda ? `<p class="suave">${esc(p.ayuda)}</p>` : ''}
+      <div class="fila">
+        <div><label>${p.tipo === 'semanal' ? 'Valor semanal' : 'Valor'}</label>${campoPesos('monto-' + i)}</div>
+        <div>${cuando}</div>
+      </div>
+      ${p.deuda ? `<label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo-' + i)}` : ''}
+      <input type="hidden" name="tipo-${i}" value="${p.tipo}"><input type="hidden" name="prio-${i}" value="${p.prioridad}">
+      <input type="hidden" name="nombreBase-${i}" value="${esc(p.nombre)}">
+    </div>`;
 }
 
 function pantallaInicio(c) {
   c.innerHTML = `
     <div class="tarjeta destacada">
       <p class="cifra-m">Hola 👋</p>
-      <p>Esta app le dice, cada día que trabaja, <b>cuánto guardar</b> para que el día de pagar la plata ya esté lista.</p>
+      <p>Esta app le dice, cada día que trabaja, <b>cuánto guardar</b> y para qué, para que el día de pagar la plata ya esté lista.</p>
       <p class="suave">Llene solo lo que aplique. Lo que deje sin valor no se agrega. Todo se puede cambiar después.</p>
     </div>
     <form id="form-inicio">
       <h2>¿Cómo trabaja?</h2>
       ${preguntasTrabajo()}
       <h2>Lo que hay que pagar</h2>
-      <div class="rejilla">${PLANTILLA.map(filaPlantilla).join('')}</div>
+      <div class="rejilla" id="filas">${PLANTILLA.map(filaPago).join('')}</div>
+      <button type="button" id="btn-otra-fila">+ Agregar otro pago</button>
       <button type="submit" class="principal">Empezar</button>
     </form>`;
+
+  let filas = PLANTILLA.length;
+  $('#btn-otra-fila').onclick = () => {
+    $('#filas').insertAdjacentHTML('beforeend', filaPago({ nombre: '', tipo: 'mensual', prioridad: 2, deuda: true }, filas));
+    $(`[name=nombre-${filas}]`).focus();
+    filas++;
+  };
 
   $('#form-inicio').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -211,12 +280,13 @@ function pantallaInicio(c) {
     leerTrabajo(fd);
     const nuevas = [];
     const errores = [];
-    PLANTILLA.forEach((p, i) => {
+    $$('[data-fila]').forEach((fila) => {
+      const i = fila.dataset.fila;
       const monto = num(fd.get('monto-' + i));
       if (!monto) return;
       const tipo = fd.get('tipo-' + i);
       const dia = Number(fd.get('dia-' + i));
-      const nombre = String(fd.get('nombre-' + i)).trim() || p.nombre;
+      const nombre = String(fd.get('nombre-' + i)).trim() || fd.get('nombreBase-' + i) || 'Pago';
       if (tipo === 'mensual' && !(dia >= 1 && dia <= 31)) return errores.push(nombre);
       const saldo = num(fd.get('saldo-' + i));
       nuevas.push(crearObligacion({ nombre, tipo, dia, monto, prioridad: Number(fd.get('prio-' + i)), saldoTotal: saldo || null }));
@@ -231,28 +301,70 @@ function pantallaInicio(c) {
 }
 
 /* ---------- HOY ---------- */
+/** Cuánto hay que apartar al día en un mes normal (sin atrasos), según los pagos y los días de trabajo. */
+function cuotaMesNormal() {
+  const porMes = activas().reduce((s, o) => s + (o.tipo === 'semanal' ? (o.monto * 52) / 12 : o.tipo === 'mensual' ? o.monto : 0), 0);
+  return L.redondearMil(porMes / ((datos.diasSemana * 365) / 12 / 7));
+}
+
+function avisoPlan(p) {
+  const malos = p.items.filter((x) => x.faltante > 0);
+  const cuota = pesos(p.objetivo);
+  if (!p.items.length) return '';
+  const normal = cuotaMesNormal();
+  const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normal)}</b> diarios trabajando ${datos.diasSemana} días a la semana.</p>` : '';
+  if (!malos.length) {
+    return `<div class="alerta verde">✔ Con ${cuota} diarios alcanza para todo lo del próximo mes.${lineaNormal}</div>`;
+  }
+  return `
+    <div class="alerta ambar">
+      Con ${cuota} diarios no alcanza para:
+      <ul class="lista" style="margin:6px 0">${malos.slice(0, 4).map((x) =>
+        `<li><span>${esc(x.nombre)} <span class="suave">(${fechaCorta(x.fecha)})</span></span><span class="monto">faltan ${pesos(x.faltante)}</span></li>`).join('')}</ul>
+      Para cubrir todo a tiempo habría que apartar <b>${pesos(p.necesaria)}</b> al día, trabajar más días, o abonar de otro lado.
+      ${lineaNormal}
+    </div>`;
+}
+
+function camposDia(r = {}) {
+  const fuentes = [...new Set([...datos.fuentes, ...Object.keys(r.ingresos || {})])];
+  return `
+    ${fuentes.map((f) => `<label>Le entró por ${esc(f)} <span class="suave">(ya sin comisión)</span></label>${campoPesos('ing:' + f, r.ingresos?.[f])}`).join('')}
+    <div class="fila">
+      <div><label>Gasolina</label>${campoPesos('gasolina', r.gasolina)}</div>
+      <div><label>Otros gastos</label>${campoPesos('otros', r.otros)}</div>
+    </div>
+    <label>Nota <span class="suave">(opcional)</span></label>
+    <input name="nota" value="${esc(r.nota)}" placeholder="Ej: lavada del carro, peaje…" maxlength="120">`;
+}
+function leerDia(form) {
+  const fd = new FormData(form);
+  const ingresos = {};
+  for (const [k, v] of fd.entries()) if (k.startsWith('ing:') && num(v)) ingresos[k.slice(4)] = num(v);
+  const gasolina = num(fd.get('gasolina'));
+  const otros = num(fd.get('otros'));
+  const ingreso = sumar(ingresos);
+  return { ingresos, ingreso, gasolina, otros, carro: gasolina + otros, nota: String(fd.get('nota') || '').trim(), neto: ingreso - gasolina - otros };
+}
+
 function pantallaHoy(c) {
   const f = hoy();
-  const cuentas = cuentasDeHoy();
-  const pendiente = cuentas.reduce((s, x) => s + x.pendiente, 0);
+  const p = proyeccion();
   const registrosHoy = datos.registros.filter((r) => r.fecha === f);
-  const apartadoHoy = registrosHoy.reduce((s, r) => s + r.apartado, 0);
   const proximos = [...activas()].sort((a, b) => (a.proximo < b.proximo ? -1 : 1)).slice(0, 4);
 
   c.innerHTML = `
     <div class="columnas"><div>
     <div class="tarjeta destacada">
-      <p class="suave">${apartadoHoy ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar'}</p>
-      <p class="cifra">${pesos(pendiente)}</p>
-      <p class="suave">${pendiente ? 'para que no falte cuando lleguen los pagos.' : apartadoHoy ? '¡Listo por hoy! 💪' : 'No hay nada pendiente hoy.'}</p>
+      <p class="suave">${p.ya ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar'}</p>
+      <p class="cifra">${pesos(p.pendienteHoy)}</p>
+      <p class="suave">${p.pendienteHoy ? (p.automatica ? 'para que alcance para todos los pagos.' : `de la cuota diaria de ${pesos(p.objetivo)}.`) : '¡Listo por hoy! 💪'}</p>
     </div>
+    ${avisoPlan(p)}
 
     <form id="form-dia" class="tarjeta">
       <h2 style="margin-top:0">¿Cómo le fue hoy?</h2>
-      <label>¿Cuánto le entró hoy? <span class="suave">(InDrive + Uber, ya sin comisión)</span></label>
-      ${campoPesos('ingreso')}
-      <label>¿Cuánto gastó en gasolina o el carro hoy?</label>
-      ${campoPesos('carro')}
+      ${camposDia()}
       <div id="calculo"></div>
       <p class="suave" style="margin-top:12px">¿Hoy no se trabajó? No registre nada: lo de hoy se reparte solo en los próximos días.</p>
     </form>
@@ -261,10 +373,10 @@ function pantallaHoy(c) {
       <h2>Lo que ya registró hoy</h2>
       <div class="tarjeta"><ul class="lista">${registrosHoy.map((r) => `
         <li><span>Le entró ${pesos(r.ingreso)}, apartó <b>${pesos(r.apartado)}</b></span>
-        <button class="chico" data-deshacer="${r.id}">Deshacer</button></li>`).join('')}</ul></div>` : ''}
+        <button class="chico" data-editar-registro="${r.id}">Editar</button></li>`).join('')}</ul></div>` : ''}
     </div><div>
     <h2 class="primero">Lo que viene</h2>
-    ${proximos.map((o) => tarjetaCorta(o, f)).join('') || '<p class="suave">No hay pagos. Agréguelos en "Pagos".</p>'}
+    ${proximos.map((o) => tarjetaCorta(o, f, p.faltantes)).join('') || '<p class="suave">No hay pagos. Agréguelos en "Pagos".</p>'}
     </div></div>
   `;
 
@@ -273,28 +385,26 @@ function pantallaHoy(c) {
   let apartarEditado = false;
 
   function actualizar() {
-    const ingreso = num(form.ingreso.value);
-    const carro = num(form.carro.value);
-    const neto = Math.max(0, ingreso - carro);
-    if (!ingreso) { calculo.innerHTML = ''; return; }
+    const d = leerDia(form);
+    if (!d.ingreso) { calculo.innerHTML = ''; return; }
+    const neto = Math.max(0, d.neto);
     const campo = $('[name=apartar]', calculo);
-    let apartar = apartarEditado && campo ? num(campo.value) : Math.min(neto, pendiente);
-    const items = cuentas.map((x) => ({ id: x.o.id, cuota: x.pendiente, falta: x.falta, proximo: x.o.proximo, prioridad: x.o.prioridad }));
-    const r = L.repartir(items, apartar);
-    apartar -= r.sobrante; // no se puede apartar más de lo que se debe
+    const apartar = apartarEditado && campo ? num(campo.value) : Math.min(neto, p.pendienteHoy);
+    const r = L.repartirDia(activas(), apartar);
     const queda = neto - apartar;
+    const faltoCuota = Math.max(0, p.pendienteHoy - apartar);
     const html = `
-      <p class="suave" style="margin-top:14px">Le quedó limpio: <b>${pesos(neto)}</b></p>
+      <p class="suave" style="margin-top:14px">Le quedó limpio: <b>${pesos(d.neto)}</b></p>
       <label>Aparte hoy</label>
       ${campoPesos('apartar', apartar)}
-      ${Object.keys(r.reparto).length ? `<ul class="lista">${Object.entries(r.reparto).map(([id, m]) =>
-        `<li><span>${esc(buscar(id).nombre)}</span><span class="monto">${pesos(m)}</span></li>`).join('')}</ul>` : ''}
-      ${r.sinCubrir ? `<div class="alerta ambar">Hoy no alcanzó para todo: faltaron ${pesos(r.sinCubrir)}. No pasa nada, se reparten solos en los próximos días.</div>` : ''}
+      ${apartar ? `<ul class="lista">${Object.entries(r.reparto).map(([id, m]) =>
+        `<li><span>${esc(buscar(id).nombre)}</span><span class="monto">${pesos(m)}</span></li>`).join('')}
+        ${r.extra ? `<li><span>Ahorro extra <span class="suave">(todo lo demás ya está cubierto)</span></span><span class="monto">${pesos(r.extra)}</span></li>` : ''}</ul>` : ''}
+      ${faltoCuota ? `<div class="alerta ambar">Hoy faltaron ${pesos(faltoCuota)} para la cuota. Se compensa en los próximos días.</div>` : ''}
       ${queda < 0 ? `<div class="alerta ambar">Está apartando más de lo que le quedó hoy.</div>` : ''}
-      <div class="alerta verde">Para la casa y el día a día le quedan: ${pesos(Math.max(0, queda))}</div>
-      <p class="suave">👉 Pase los ${pesos(apartar)} al bolsillo de ahorro (Nequi / Daviplata) hoy mismo. Si se queda en la billetera, se gasta.</p>
-      <button type="button" class="principal" id="btn-registrar" ${apartar <= 0 && !ingreso ? 'disabled' : ''}>Ya lo aparté ✔</button>`;
-    // conservar el foco si está escribiendo en "Aparte hoy"
+      <div class="alerta verde">Para la casa y el día a día quedan: ${pesos(Math.max(0, queda))}</div>
+      <p class="suave">👉 Pase los ${pesos(apartar)} al bolsillo de ahorro hoy mismo. Si se queda en la billetera, se gasta.</p>
+      <button type="button" class="principal" id="btn-registrar">Ya lo aparté ✔</button>`;
     const enfocado = document.activeElement && document.activeElement.name === 'apartar';
     calculo.innerHTML = html;
     if (enfocado) {
@@ -302,44 +412,76 @@ function pantallaHoy(c) {
       nuevo.focus();
       nuevo.setSelectionRange(nuevo.value.length, nuevo.value.length);
     }
-    $('#btn-registrar').onclick = () => registrar({ ingreso, carro, apartado: apartar, reparto: r.reparto });
+    $('#btn-registrar').onclick = () => {
+      const { neto: _n, ...dia } = d;
+      const reg = { id: nuevoId(), fecha: hoy(), ...dia, apartado: apartar, reparto: r.reparto, extra: r.extra };
+      aplicarReparto(reg);
+      datos.registros.push(reg);
+      guardar();
+      avisar(apartar ? `Bien hecho: ${pesos(apartar)} apartados` : 'Día registrado');
+      render();
+    };
   }
 
   form.addEventListener('input', (e) => {
     if (e.target.name === 'apartar') apartarEditado = true;
-    else if (e.target.name === 'ingreso' || e.target.name === 'carro') apartarEditado = false;
+    else if (e.target.name.startsWith('ing:') || e.target.name === 'gasolina' || e.target.name === 'otros') apartarEditado = false;
     actualizar();
   });
   form.addEventListener('submit', (e) => e.preventDefault());
-
-  $$('[data-deshacer]', c).forEach((b) => (b.onclick = () => deshacer(b.dataset.deshacer)));
-  activarBotonesTarjetas(c);
+  activarBotones(c);
 }
 
-function registrar({ ingreso, carro, apartado, reparto }) {
-  for (const [id, m] of Object.entries(reparto)) buscar(id).apartado += m;
-  datos.registros.push({ id: nuevoId(), fecha: hoy(), ingreso, carro, apartado, reparto });
-  guardar();
-  avisar(apartado ? `Bien hecho: ${pesos(apartado)} apartados` : 'Día registrado');
-  render();
-}
-
-function deshacer(id) {
+/** Editar o borrar un día ya registrado (de hoy o de cualquier fecha). */
+function editarRegistro(id) {
   const r = datos.registros.find((x) => x.id === id);
   if (!r) return;
-  for (const [oid, m] of Object.entries(r.reparto)) {
-    const o = buscar(oid);
-    if (o) o.apartado = Math.max(0, o.apartado - m);
-  }
-  datos.registros = datos.registros.filter((x) => x.id !== id);
-  guardar();
-  avisar('Registro borrado');
-  render();
+  abrirModal(`
+    <h2>Editar día</h2>
+    <label>Fecha</label><input type="date" name="fecha" value="${r.fecha}" max="${hoy()}" required>
+    ${camposDia(r)}
+    <label>Apartó</label>${campoPesos('apartar', r.apartado)}
+    <p class="suave">Si cambia lo apartado, se vuelve a repartir entre los pagos.</p>
+    ${botonesModal(true)}
+  `, (fd, boton) => {
+    if (boton && boton.value === 'borrar') {
+      preguntar('¿Borrar este día? Lo apartado se descuenta de los pagos.', 'Borrar').then((si) => {
+        if (!si) return;
+        revertirReparto(r);
+        datos.registros = datos.registros.filter((x) => x.id !== id);
+        $('#modal').close();
+        guardar(); avisar('Día borrado'); render();
+      });
+      return false;
+    }
+    const d = leerDia($('#modal-form'));
+    const apartar = num(fd.get('apartar'));
+    revertirReparto(r);
+    if (apartar !== r.apartado) {
+      const nuevo = L.repartirDia(activas(), apartar);
+      r.reparto = nuevo.reparto;
+      r.extra = nuevo.extra;
+    }
+    const { neto: _n, ...dia } = d;
+    Object.assign(r, dia, { fecha: fd.get('fecha') || r.fecha, apartado: apartar });
+    aplicarReparto(r);
+    datos.registros.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+    guardar(); avisar('Guardado'); render();
+  });
 }
 
 /* ---------- PAGOS (compromisos) ---------- */
-function tarjetaCorta(o, f) {
-  const est = L.estado(o, f);
+function lineaPlan(o, faltantes) {
+  if (o.apartado >= o.monto) return '';
+  const f = faltantes[o.id];
+  if (f == null) return '';
+  return f > 0
+    ? `<p class="alerta ambar" style="margin:8px 0 0;padding:8px 12px">Con la cuota diaria faltarían ${pesos(f)}</p>`
+    : '<p class="suave">✔ Con la cuota diaria llega completo</p>';
+}
+
+function tarjetaCorta(o, f, faltantes) {
+  const est = estadoDe(o, f, faltantes);
   const pct = Math.min(100, Math.round((o.apartado / (o.monto || 1)) * 100));
   return `
     <div class="tarjeta">
@@ -347,6 +489,7 @@ function tarjetaCorta(o, f) {
       <p class="suave">${fechaCorta(o.proximo)} · ${cuandoVence(o.proximo)}</p>
       <div class="barra-progreso"><div style="width:${pct}%"></div></div>
       <p><b>${pesos(o.apartado)}</b> de ${pesos(o.monto)}</p>
+      ${lineaPlan(o, faltantes)}
       ${est === 'vence-hoy' || est === 'vencida' || est === 'cubierta'
         ? `<div class="botones"><button class="chico" data-pagar="${o.id}">Ya pagué</button></div>` : ''}
     </div>`;
@@ -354,19 +497,22 @@ function tarjetaCorta(o, f) {
 
 function pantallaPagos(c) {
   const f = hoy();
-  const cuentas = cuentasDeHoy();
-  const lista = [...cuentas].sort((a, b) => (a.o.proximo < b.o.proximo ? -1 : 1));
+  const p = proyeccion();
+  const lista = [...activas()].sort((a, b) => (a.proximo < b.proximo ? -1 : 1));
   const terminadas = datos.obligaciones.filter((o) => o.activa === false);
-  const totalApartado = activas().reduce((s, o) => s + o.apartado, 0);
+  const totalApartado = activas().reduce((s, o) => s + o.apartado, 0) + datos.extra;
 
   c.innerHTML = `
     <div class="tarjeta">
-      <p class="suave">Plata apartada en total (debería estar en su bolsillo de ahorro)</p>
+      <p class="suave">Plata apartada en total (debería estar en el bolsillo de ahorro)</p>
       <p class="cifra-m">${pesos(totalApartado)}</p>
+      ${datos.extra ? `<p class="suave">De eso, ahorro extra (sin pago asignado): <b>${pesos(datos.extra)}</b>
+        <button class="chico" id="btn-extra" style="margin-left:6px">Usar / ajustar</button></p>` : ''}
     </div>
+    ${avisoPlan(p)}
     <button class="principal" id="btn-nuevo">+ Agregar un pago</button>
-    <div class="rejilla">${lista.map(({ o, cuota }) => {
-      const est = L.estado(o, f);
+    <div class="rejilla">${lista.map((o) => {
+      const est = estadoDe(o, f, p.faltantes);
       const pct = Math.min(100, Math.round((o.apartado / (o.monto || 1)) * 100));
       const cada = o.tipo === 'mensual' ? `cada mes el ${o.dia}` : o.tipo === 'semanal' ? `cada ${DIAS[o.dia]}` : 'una sola vez';
       return `
@@ -375,8 +521,10 @@ function pantallaPagos(c) {
         <p class="suave">${pesos(o.monto)} · ${cada}</p>
         <p>Próximo pago: <b>${fechaCorta(o.proximo)}</b> (${cuandoVence(o.proximo)})</p>
         <div class="barra-progreso"><div style="width:${pct}%"></div></div>
-        <p><b>${pesos(o.apartado)}</b> apartados de ${pesos(o.monto)}${cuota ? ` · hoy: ${pesos(cuota)}` : ''}</p>
+        <p><b>${pesos(o.apartado)}</b> apartados de ${pesos(o.monto)}</p>
         ${o.saldoTotal != null ? `<p class="suave">Deuda total que queda: <b>${pesos(o.saldoTotal)}</b></p>` : ''}
+        ${o.nota ? `<p class="suave">📝 ${esc(o.nota)}</p>` : ''}
+        ${lineaPlan(o, p.faltantes)}
         <div class="botones">
           <button class="chico" data-pagar="${o.id}">Ya pagué</button>
           <button class="chico" data-editar="${o.id}">Editar</button>
@@ -390,24 +538,34 @@ function pantallaPagos(c) {
         <div class="botones"><button class="chico" data-editar="${o.id}">Editar / reactivar</button></div></div>`).join('')}` : ''}
   `;
   $('#btn-nuevo').onclick = () => editar(null);
-  activarBotonesTarjetas(c);
+  if ($('#btn-extra')) $('#btn-extra').onclick = dialogoExtra;
+  activarBotones(c);
 }
 
-function activarBotonesTarjetas(c) {
+function activarBotones(c) {
   $$('[data-pagar]', c).forEach((b) => (b.onclick = () => dialogoPagar(b.dataset.pagar)));
   $$('[data-editar]', c).forEach((b) => (b.onclick = () => editar(b.dataset.editar)));
+  $$('[data-editar-registro]', c).forEach((b) => (b.onclick = () => editarRegistro(b.dataset.editarRegistro)));
+  $$('[data-deshacer-pago]', c).forEach((b) => (b.onclick = () => deshacerPago(b.dataset.deshacerPago)));
 }
 
-function abrirModal(html, alEnviar) {
-  const modal = $('#modal');
-  const form = $('#modal-form');
-  form.innerHTML = html;
-  form.onsubmit = (e) => {
-    if (e.submitter && e.submitter.value === 'cancelar') return;
-    e.preventDefault();
-    if (alEnviar(new FormData(form), e.submitter) !== false) modal.close();
-  };
-  modal.showModal();
+function dialogoExtra() {
+  abrirModal(`
+    <h2>Ahorro extra</h2>
+    <p class="suave">Plata apartada que no tiene un pago asignado. Puede pasarla a un pago o cambiar el valor si la usó.</p>
+    <label>Ahorro extra</label>${campoPesos('extra', datos.extra)}
+    <label>Pasar a un pago <span class="suave">(opcional)</span></label>
+    <select name="destino"><option value="">— No pasar —</option>${activas().map((o) => `<option value="${o.id}">${esc(o.nombre)}</option>`).join('')}</select>
+    <label>¿Cuánto pasar?</label>${campoPesos('pasar')}
+    ${botonesModal()}
+  `, (fd) => {
+    let extra = num(fd.get('extra'));
+    const destino = buscar(fd.get('destino'));
+    const pasar = Math.min(num(fd.get('pasar')), extra);
+    if (destino && pasar) { destino.apartado += pasar; extra -= pasar; }
+    datos.extra = extra;
+    guardar(); render();
+  });
 }
 
 function dialogoPagar(id) {
@@ -417,21 +575,35 @@ function dialogoPagar(id) {
     <p class="suave">Tiene apartados ${pesos(o.apartado)}.</p>
     <label>¿Cuánto pagó?</label>
     ${campoPesos('pagado', o.monto)}
+    <label>Fecha del pago</label><input type="date" name="fecha" value="${hoy()}" max="${hoy()}">
     <p class="suave">Si es el fondo del carro y no lo usó, ponga $0: la plata sigue guardada y pasa al otro mes.</p>
-    <div class="botones acciones"><button value="cancelar" formnovalidate>Cancelar</button><button class="principal" style="margin:0;flex:1">Pagado</button></div>
+    ${botonesModal(false, 'Pagado')}
   `, (fd) => {
     const pagado = num(fd.get('pagado'));
-    const antes = o.apartado;
+    const antes = { ...o };
     Object.assign(o, L.pagar(o, pagado));
-    datos.pagos.push({ id: nuevoId(), fecha: hoy(), obligacionId: o.id, nombre: o.nombre, monto: pagado });
+    datos.pagos.push({ id: nuevoId(), fecha: fd.get('fecha') || hoy(), obligacionId: o.id, nombre: o.nombre, monto: pagado, antes });
     guardar();
-    avisar(pagado > antes ? `Pagado. ${pesos(pagado - antes)} salieron de otro lado.` : 'Pagado ✔');
+    avisar(pagado > antes.apartado ? `Pagado. ${pesos(pagado - antes.apartado)} salieron de otro lado.` : 'Pagado ✔');
     render();
   });
 }
 
+/** Solo se puede deshacer el último pago de cada compromiso (vuelve todo como estaba). */
+const puedeDeshacer = (pg) => pg.antes && buscar(pg.obligacionId) &&
+  datos.pagos.filter((x) => x.obligacionId === pg.obligacionId).pop() === pg;
+
+async function deshacerPago(id) {
+  const pg = datos.pagos.find((x) => x.id === id);
+  if (!pg || !puedeDeshacer(pg)) return;
+  if (!(await preguntar(`¿Deshacer el pago de ${pg.nombre} por ${pesos(pg.monto)}? Vuelve a quedar como antes de pagar.`, 'Deshacer'))) return;
+  Object.assign(buscar(pg.obligacionId), pg.antes);
+  datos.pagos = datos.pagos.filter((x) => x.id !== id);
+  guardar(); avisar('Pago deshecho'); render();
+}
+
 function editar(id) {
-  const o = id ? buscar(id) : { nombre: '', tipo: 'mensual', dia: '', monto: '', prioridad: 2, saldoTotal: null, apartado: 0 };
+  const o = id ? buscar(id) : { nombre: '', tipo: 'mensual', dia: '', monto: '', prioridad: 2, saldoTotal: null, apartado: 0, nota: '' };
   abrirModal(`
     <h2>${id ? 'Editar pago' : 'Nuevo pago'}</h2>
     <label>Nombre</label><input name="nombre" value="${esc(o.nombre)}" required placeholder="Ej: Recibo de luz">
@@ -442,6 +614,8 @@ function editar(id) {
       <option value="unica" ${o.tipo === 'unica' ? 'selected' : ''}>Una sola vez</option>
     </select>
     <div id="cuando"></div>
+    ${id && o.tipo !== 'unica' ? `<label>Próxima fecha de pago</label><input type="date" name="proximo" value="${o.proximo || ''}">
+      <p class="suave">Cámbiela si este mes el recibo llega otro día.</p>` : ''}
     <label>¿Cuánto es?</label>${campoPesos('monto', o.monto)}
     <label>Deuda total <span class="suave">(opcional; se va bajando con cada pago)</span></label>${campoPesos('saldo', o.saldoTotal)}
     <label>¿Qué tan grave es no pagarlo a tiempo?</label>
@@ -451,16 +625,19 @@ function editar(id) {
       <option value="3" ${o.prioridad === 3 ? 'selected' : ''}>Puede esperar</option>
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
-    <div class="botones acciones">
-      <button value="cancelar" formnovalidate>Cancelar</button>
-      ${id ? '<button value="borrar" class="peligro" formnovalidate>Borrar</button>' : ''}
-      <button value="guardar" class="principal" style="margin:0;flex:1">Guardar</button>
-    </div>
+    <label>Nota <span class="suave">(opcional)</span></label>
+    <input name="nota" value="${esc(o.nota)}" placeholder="Ej: número de contrato, a quién se le paga…" maxlength="160">
+    ${botonesModal(!!id)}
   `, (fd, boton) => {
     if (boton && boton.value === 'borrar') {
-      if (!confirm(`¿Borrar "${o.nombre}"? Se pierde lo apartado registrado.`)) return false;
-      datos.obligaciones = datos.obligaciones.filter((x) => x.id !== id);
-      guardar(); render(); return;
+      preguntar(`¿Borrar "${o.nombre}"? Lo apartado para este pago pasa a ahorro extra.`, 'Borrar').then((si) => {
+        if (!si) return;
+        datos.extra += o.apartado || 0;
+        datos.obligaciones = datos.obligaciones.filter((x) => x.id !== id);
+        $('#modal').close();
+        guardar(); render();
+      });
+      return false;
     }
     const tipo = fd.get('tipo');
     const campos = {
@@ -469,6 +646,7 @@ function editar(id) {
       monto: num(fd.get('monto')),
       prioridad: Number(fd.get('prioridad')),
       saldoTotal: num(fd.get('saldo')) || null,
+      nota: String(fd.get('nota') || '').trim(),
     };
     if (tipo === 'unica') campos.fecha = fd.get('fecha');
     else campos.dia = Number(fd.get('dia'));
@@ -481,23 +659,24 @@ function editar(id) {
     } else {
       const cambioFecha = tipo !== o.tipo || campos.dia !== o.dia || campos.fecha !== o.fecha;
       const estabaTerminada = o.activa === false;
+      const proximoManual = fd.get('proximo');
       Object.assign(o, campos, { apartado: num(fd.get('apartado')), activa: true });
-      if (cambioFecha || estabaTerminada) { o.proximo = L.primeraFecha(o, hoy()); o.inicio = hoy(); }
+      if (proximoManual && proximoManual !== o.proximo && !cambioFecha) { o.proximo = proximoManual; o.inicio = hoy(); }
+      else if (cambioFecha || estabaTerminada) { o.proximo = L.primeraFecha(o, hoy()); o.inicio = hoy(); }
     }
     guardar(); render();
+  }, (form) => {
+    const pintarCuando = () => {
+      const t = form.tipo.value;
+      $('#cuando', form).innerHTML = t === 'mensual'
+        ? `<label>¿Qué día del mes?</label><input name="dia" inputmode="numeric" maxlength="2" value="${o.tipo === 'mensual' ? o.dia : ''}" placeholder="Ej: 15">`
+        : t === 'semanal'
+          ? `<label>¿Qué día de la semana?</label><select name="dia">${DIAS.map((d, n) => `<option value="${n}" ${o.tipo === 'semanal' && o.dia === n ? 'selected' : ''}>${d}</option>`).join('')}</select>`
+          : `<label>¿Qué fecha?</label><input type="date" name="fecha" value="${o.fecha || ''}">`;
+    };
+    form.tipo.onchange = pintarCuando;
+    pintarCuando();
   });
-
-  const form = $('#modal-form');
-  const pintarCuando = () => {
-    const t = form.tipo.value;
-    $('#cuando').innerHTML = t === 'mensual'
-      ? `<label>¿Qué día del mes?</label><input name="dia" inputmode="numeric" maxlength="2" value="${o.tipo === 'mensual' ? o.dia : ''}" placeholder="Ej: 15">`
-      : t === 'semanal'
-        ? `<label>¿Qué día de la semana?</label><select name="dia">${DIAS.map((d, n) => `<option value="${n}" ${o.tipo === 'semanal' && o.dia === n ? 'selected' : ''}>${d}</option>`).join('')}</select>`
-        : `<label>¿Qué fecha?</label><input type="date" name="fecha" value="${o.fecha || ''}" min="${hoy()}">`;
-  };
-  form.tipo.onchange = pintarCuando;
-  pintarCuando();
 }
 
 /* ---------- HISTORIAL ---------- */
@@ -509,37 +688,67 @@ function pantallaHistorial(c) {
   const semana = datos.registros.filter((r) => r.fecha >= desde7);
   const delMes = datos.registros.filter((r) => r.fecha.startsWith(mes));
   const neto = (l) => suma(l, 'ingreso') - suma(l, 'carro');
+  const porFuente = {};
+  for (const r of delMes) for (const [k, v] of Object.entries(r.ingresos || {})) porFuente[k] = (porFuente[k] || 0) + v;
 
   const movimientos = [
-    ...datos.registros.map((r) => ({ fecha: r.fecha, txt: `Le entró ${pesos(r.ingreso)}${r.carro ? `, carro ${pesos(r.carro)}` : ''}`, monto: `+${pesos(r.apartado)}` })),
-    ...datos.pagos.map((p) => ({ fecha: p.fecha, txt: `Pagó ${esc(p.nombre)}`, monto: `−${pesos(p.monto)}` })),
-  ].sort((a, b) => (a.fecha < b.fecha ? 1 : -1)).slice(0, 60);
+    ...datos.registros.map((r) => ({
+      fecha: r.fecha,
+      txt: `Le entró ${pesos(r.ingreso)}${r.carro ? ` · gastos ${pesos(r.carro)}` : ''}${r.nota ? `<br><span class="suave">📝 ${esc(r.nota)}</span>` : ''}`,
+      monto: `+${pesos(r.apartado)}`,
+      boton: `<button class="chico" data-editar-registro="${r.id}">Editar</button>`,
+    })),
+    ...datos.pagos.map((pg) => ({
+      fecha: pg.fecha,
+      txt: `Pagó ${esc(pg.nombre)}`,
+      monto: `−${pesos(pg.monto)}`,
+      boton: puedeDeshacer(pg) ? `<button class="chico" data-deshacer-pago="${pg.id}">Deshacer</button>` : '',
+    })),
+  ].sort((a, b) => (a.fecha < b.fecha ? 1 : -1)).slice(0, 80);
 
   c.innerHTML = `
-    <h2>Últimos 7 días</h2>
+    <div class="rejilla">
+    <div><h2>Últimos 7 días</h2>
     <div class="tarjeta"><ul class="lista">
       <li><span>Días trabajados</span><span class="monto">${new Set(semana.map((r) => r.fecha)).size}</span></li>
-      <li><span>Le quedó limpio</span><span class="monto">${pesos(neto(semana))}</span></li>
+      <li><span>Quedó limpio</span><span class="monto">${pesos(neto(semana))}</span></li>
       <li><span>Apartó</span><span class="monto">${pesos(suma(semana, 'apartado'))}</span></li>
-    </ul></div>
-    <h2>Este mes</h2>
+    </ul></div></div>
+    <div><h2>Este mes</h2>
     <div class="tarjeta"><ul class="lista">
-      <li><span>Le entró</span><span class="monto">${pesos(suma(delMes, 'ingreso'))}</span></li>
-      <li><span>Gasolina y carro</span><span class="monto">${pesos(suma(delMes, 'carro'))}</span></li>
+      ${Object.entries(porFuente).map(([k, v]) => `<li><span>Entró por ${esc(k)}</span><span class="monto">${pesos(v)}</span></li>`).join('')}
+      <li><span>Gasolina</span><span class="monto">${pesos(suma(delMes, 'gasolina'))}</span></li>
+      <li><span>Otros gastos</span><span class="monto">${pesos(suma(delMes, 'otros'))}</span></li>
       <li><span>Apartó</span><span class="monto">${pesos(suma(delMes, 'apartado'))}</span></li>
-      <li><span>Pagó</span><span class="monto">${pesos(suma(datos.pagos.filter((p) => p.fecha.startsWith(mes)), 'monto'))}</span></li>
-    </ul></div>
+      <li><span>Pagó</span><span class="monto">${pesos(suma(datos.pagos.filter((x) => x.fecha.startsWith(mes)), 'monto'))}</span></li>
+    </ul></div></div>
+    </div>
     <h2>Movimientos</h2>
+    <p class="suave">Toque "Editar" para corregir o borrar un día. Los pagos se pueden deshacer (el último de cada uno).</p>
     <div class="tarjeta">${movimientos.length ? `<ul class="lista">${movimientos.map((m) =>
-      `<li><span><span class="suave">${fechaCorta(m.fecha)}</span><br>${m.txt}</span><span class="monto">${m.monto}</span></li>`).join('')}</ul>`
+      `<li><span><span class="suave">${fechaCorta(m.fecha)}</span><br>${m.txt}</span>
+       <span class="derecha"><span class="monto">${m.monto}</span>${m.boton}</span></li>`).join('')}</ul>`
       : '<p class="suave">Todavía no hay movimientos.</p>'}</div>`;
+  activarBotones(c);
 }
 
 /* ---------- AJUSTES ---------- */
 function pantallaAjustes(c) {
   c.innerHTML = `
-    <h2>Cómo se trabaja</h2>
-    <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form>
+    <div class="rejilla">
+    <div><h2>Cuota y días de trabajo</h2>
+    <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form></div>
+
+    <div><h2>De dónde entra la plata</h2>
+    <form class="tarjeta" id="form-fuentes">
+      <p class="suave">Cada una sale como un campo en "¿Cómo le fue hoy?". Agregue Uber cuando empiece.</p>
+      <div id="fuentes">${datos.fuentes.map((f) => filaFuente(f)).join('')}</div>
+      <div class="botones">
+        <button type="button" id="btn-fuente">+ Agregar</button>
+        <button class="principal" style="margin:0;flex:1">Guardar</button>
+      </div>
+    </form>
+
     <h2>Copia de seguridad</h2>
     <div class="tarjeta">
       <p class="suave">Todo se guarda solo en este teléfono, no en internet. Descargue una copia de vez en cuando por si se pierde o cambia el celular.</p>
@@ -549,6 +758,7 @@ function pantallaAjustes(c) {
         <input type="file" id="archivo" accept="application/json,.json" hidden>
       </div>
     </div>
+
     <h2>Clave de entrada</h2>
     <form class="tarjeta" id="form-clave">
       ${tieneClave()
@@ -560,10 +770,34 @@ function pantallaAjustes(c) {
       <input name="clave2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" placeholder="Repita la clave" style="margin-top:8px">
       <button class="principal">Guardar clave</button>
     </form>
+
     <h2>Empezar de cero</h2>
     <div class="tarjeta">
       <button class="peligro" id="btn-borrar">Borrar todo</button>
+    </div></div>
     </div>`;
+
+  $('#form-trabajo').onchange = (e) => {
+    leerTrabajo(new FormData(e.currentTarget));
+    guardar();
+    avisar('Guardado');
+  };
+
+  $('#btn-fuente').onclick = () => {
+    $('#fuentes').insertAdjacentHTML('beforeend', filaFuente(''));
+    $$('#fuentes input').pop().focus();
+  };
+  $('#fuentes').onclick = (e) => {
+    const b = e.target.closest('[data-quitar]');
+    if (b) b.parentElement.remove();
+  };
+  $('#form-fuentes').onsubmit = (e) => {
+    e.preventDefault();
+    const nombres = [...new Set($$('#fuentes input').map((i) => i.value.trim()).filter(Boolean))];
+    if (!nombres.length) return avisar('Deje al menos una');
+    datos.fuentes = nombres;
+    guardar(); avisar('Guardado'); render();
+  };
 
   $('#form-clave').onsubmit = async (e) => {
     e.preventDefault();
@@ -576,19 +810,13 @@ function pantallaAjustes(c) {
   };
   if (tieneClave()) {
     $('#btn-bloquear').onclick = bloquear;
-    $('#btn-quitar-clave').onclick = () => {
-      if (!confirm('¿Quitar la clave?')) return;
+    $('#btn-quitar-clave').onclick = async () => {
+      if (!(await preguntar('¿Quitar la clave?', 'Quitar'))) return;
       try { localStorage.removeItem(CLAVE_PIN); } catch (e) { /* nada */ }
       avisar('Clave quitada');
       render();
     };
   }
-
-  $('#form-trabajo').onchange = (e) => {
-    leerTrabajo(new FormData(e.currentTarget));
-    guardar();
-    avisar('Guardado');
-  };
 
   $('#btn-exportar').onclick = () => {
     const blob = new Blob([JSON.stringify(datos, null, 2)], { type: 'application/json' });
@@ -605,7 +833,7 @@ function pantallaAjustes(c) {
     try {
       const d = JSON.parse(await archivo.text());
       if (!Array.isArray(d.obligaciones)) throw new Error('formato');
-      if (!confirm('Esto reemplaza lo que hay en este teléfono por la copia. ¿Seguir?')) return;
+      if (!(await preguntar('Esto reemplaza lo que hay en este teléfono por la copia. ¿Seguir?', 'Reemplazar'))) return;
       datos = migrar(d);
       guardar();
       avisar('Copia cargada');
@@ -614,12 +842,17 @@ function pantallaAjustes(c) {
       avisar('Ese archivo no es una copia válida');
     }
   };
-  $('#btn-borrar').onclick = () => {
-    if (!confirm('¿Seguro? Se borra todo lo registrado en este teléfono.')) return;
+  $('#btn-borrar').onclick = async () => {
+    if (!(await preguntar('¿Seguro? Se borra todo lo registrado en este teléfono.', 'Borrar todo'))) return;
     datos = estadoNuevo();
     guardar();
     ir('hoy');
   };
+}
+
+function filaFuente(nombre) {
+  return `<div class="fila-quitar"><input value="${esc(nombre)}" placeholder="Ej: Uber" maxlength="30" aria-label="Fuente de ingreso">
+    <button type="button" class="chico peligro" data-quitar aria-label="Quitar">✕</button></div>`;
 }
 
 /* ---------- CLAVE ----------
@@ -675,9 +908,9 @@ function pantallaBloqueo(c) {
     pin.value = '';
     avisar('Clave incorrecta');
   };
-  $('#olvide').onclick = (e) => {
+  $('#olvide').onclick = async (e) => {
     e.preventDefault();
-    if (!confirm('Sin la clave no se puede entrar. La única salida es BORRAR TODO lo de este teléfono (después puede cargar una copia de seguridad). ¿Borrar todo?')) return;
+    if (!(await preguntar('Sin la clave no se puede entrar. La única salida es BORRAR TODO lo de este teléfono (después puede cargar una copia de seguridad). ¿Borrar todo?', 'Borrar todo'))) return;
     try { localStorage.removeItem(CLAVE_PIN); localStorage.removeItem(CLAVE); } catch (err) { /* nada */ }
     datos = estadoNuevo();
     bloqueada = false;
