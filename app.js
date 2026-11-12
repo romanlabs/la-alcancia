@@ -19,6 +19,17 @@ const PLANTILLA = [
     ayuda: 'Aceite, llantas, arreglos: una platica fija cada mes para que el próximo daño no sea otra deuda.' },
 ];
 
+
+/* Plantilla para un perfil propio (no el de mamá) */
+const PLANTILLA_PERSONAL = [
+  { nombre: 'Arriendo / aporte a la casa', tipo: 'mensual', prioridad: 1 },
+  { nombre: 'Celular / internet', tipo: 'mensual', prioridad: 1 },
+  { nombre: 'Transporte', tipo: 'mensual', prioridad: 2 },
+  { nombre: 'Tarjeta de crédito', tipo: 'mensual', prioridad: 1, deuda: true,
+    ayuda: 'La cuota del mes de su tarjeta. Si sabe la deuda total, póngala abajo.' },
+  { nombre: 'Suscripciones (música, series…)', tipo: 'mensual', prioridad: 3 },
+];
+
 /* ---------- utilidades ---------- */
 const $ = (sel, raiz = document) => raiz.querySelector(sel);
 const $$ = (sel, raiz = document) => [...raiz.querySelectorAll(sel)];
@@ -67,7 +78,7 @@ function estadoNuevo() {
     version: 3, configurado: false,
     diasSemana: 6, margen: 2, cuotaDiaria: 40000,
     fuentes: ['InDrive'], extra: 0,
-    ahorroPct: 0, metas: [], banco: 'Nu',
+    ahorroPct: 0, metas: [], banco: 'Nu', frecuencia: 'diario',
     obligaciones: [], registros: [], pagos: [],
     borrados: { obligaciones: [], registros: [], pagos: [], metas: [] }, // para borrarlos también en la nube
   };
@@ -78,6 +89,7 @@ function marcarBorrado(tabla, id) {
   if (!datos.borrados[tabla]) datos.borrados[tabla] = [];
   if (!datos.borrados[tabla].includes(id)) datos.borrados[tabla].push(id);
 }
+const FRECUENCIAS_VALIDAS = ['diario', 'semanal', 'quincenal', 'mensual'];
 /** Pone al día datos guardados con versiones anteriores de la app. */
 function migrar(d) {
   const n = { ...estadoNuevo(), ...d };
@@ -87,6 +99,7 @@ function migrar(d) {
   const b = n.borrados || {};
   n.borrados = { obligaciones: b.obligaciones || [], registros: b.registros || [], pagos: b.pagos || [], metas: b.metas || [] };
   n.metas = Array.isArray(n.metas) ? n.metas : [];
+  if (!FRECUENCIAS_VALIDAS.includes(n.frecuencia)) n.frecuencia = 'diario';
   n.ahorroPct = Math.min(100, Math.max(0, Number(n.ahorroPct) || 0));
   n.registros = (n.registros || []).map((r) => ({
     ingresos: r.ingresos || { Total: r.ingreso || 0 },
@@ -100,26 +113,95 @@ function migrar(d) {
   n.version = 3;
   return n;
 }
-function cargar() {
+/* ---------- perfiles ("Mamá", "Yo"...) ---------- */
+const CLAVE_PERFILES = 'la-alcancia-perfiles';
+const claveDatos = (perfil) => (perfil === 'mama' ? CLAVE : `${CLAVE}:${perfil}`); // mamá conserva la clave de siempre
+function leerPerfiles() {
   try {
-    const t = localStorage.getItem(CLAVE);
-    if (t) return migrar(JSON.parse(t));
+    const p = JSON.parse(localStorage.getItem(CLAVE_PERFILES) || 'null');
+    if (p && Array.isArray(p.lista) && p.lista.length) return p;
+  } catch (e) { /* nada */ }
+  return { lista: [{ id: 'mama', nombre: 'Mamá' }], activo: 'mama' };
+}
+function guardarPerfiles() {
+  try { localStorage.setItem(CLAVE_PERFILES, JSON.stringify(perfiles)); } catch (e) { /* nada */ }
+}
+let perfiles = leerPerfiles();
+const nombrePerfil = (id) => (perfiles.lista.find((p) => p.id === id) || {}).nombre || 'Mamá';
+
+function cargar(perfil = perfiles.activo) {
+  let d = estadoNuevo();
+  try {
+    const t = localStorage.getItem(claveDatos(perfil));
+    if (t) d = migrar(JSON.parse(t));
   } catch (e) { /* sin almacenamiento: empieza vacío */ }
-  return estadoNuevo();
+  d.perfil = perfil;
+  d.perfilNombre = nombrePerfil(perfil);
+  return d;
 }
 function guardarLocal() {
   try {
-    localStorage.setItem(CLAVE, JSON.stringify(datos));
+    localStorage.setItem(claveDatos(datos.perfil || 'mama'), JSON.stringify(datos));
   } catch (e) {
     avisar('No se pudo guardar en este teléfono');
   }
 }
+
+async function cambiarPerfil(id) {
+  if (id === datos.perfil) return;
+  if (typeof Nube !== 'undefined') await Nube.subirSiPendiente(datos);
+  guardarLocal();
+  perfiles.activo = id;
+  guardarPerfiles();
+  datos = cargar(id);
+  vista = 'hoy';
+  render();
+  window.scrollTo(0, 0);
+  traerDeLaNube(true);
+}
+
+function nuevoPerfil() {
+  abrirModal(`
+    <h2>Nuevo perfil</h2>
+    <p class="suave">Cada perfil tiene sus propias cuentas, metas, cajitas y cuota. Por ejemplo: "Yo".</p>
+    <label>Nombre</label><input name="nombre" required maxlength="20" placeholder="Ej: Yo">
+    ${botonesModal(false, 'Crear')}
+  `, (fd) => {
+    const nombre = String(fd.get('nombre')).trim();
+    if (!nombre) { avisar('Falta el nombre'); return false; }
+    const base = nombre.toLowerCase().normalize('NFD').replace(/[^a-z0-9]/g, '').slice(0, 12) || 'perfil';
+    const id = perfiles.lista.some((p) => p.id === base) ? `${base}${Date.now().toString(36).slice(-4)}` : base;
+    perfiles.lista.push({ id, nombre });
+    guardarPerfiles();
+    cambiarPerfil(id);
+  });
+}
+
+function pintarPerfiles() {
+  const caja = $('#perfiles');
+  if (!caja) return;
+  caja.hidden = bloqueada;
+  caja.innerHTML = perfiles.lista.map((p) =>
+    `<button type="button" class="perfil ${p.id === datos.perfil ? 'activo' : ''}" data-perfil="${esc(p.id)}">${esc(p.nombre)}</button>`).join('') +
+    '<button type="button" class="perfil mas" id="btn-nuevo-perfil" aria-label="Nuevo perfil">+</button>';
+  $$('[data-perfil]', caja).forEach((b) => (b.onclick = () => cambiarPerfil(b.dataset.perfil)));
+  $('#btn-nuevo-perfil').onclick = nuevoPerfil;
+}
+
+/** Frecuencia de ingresos del perfil: textos según si le pagan a diario, por semana, quincena o mes. */
+const FRECUENCIAS = {
+  diario: { nombre: 'Varía / casi a diario', por: 'al día', cada: 'cada día que trabaja', pago: 'día de trabajo', pagos: 'días de trabajo', periodo: 1 },
+  semanal: { nombre: 'Cada semana', por: 'por semana', cada: 'cada semana', pago: 'pago semanal', pagos: 'pagos semanales', periodo: 7 },
+  quincenal: { nombre: 'Cada quincena', por: 'por quincena', cada: 'cada quincena', pago: 'quincena', pagos: 'quincenas', periodo: 15 },
+  mensual: { nombre: 'Cada mes', por: 'por mes', cada: 'cada mes', pago: 'sueldo', pagos: 'sueldos', periodo: 30 },
+};
+const frec = () => FRECUENCIAS[datos.frecuencia] || FRECUENCIAS.diario;
 function guardar() {
   guardarLocal();
   if (typeof Nube !== 'undefined') Nube.programarSubida(() => datos);
 }
 
-let datos = cargar();
+let datos = cargar(perfiles.activo);
 let vista = 'hoy';
 
 const activas = () => datos.obligaciones.filter((o) => o.activa !== false);
@@ -137,8 +219,10 @@ const apartadoDelDia = (fecha) => datos.registros.filter((r) => r.fecha === fech
 /** Proyección con la cuota diaria (o la necesaria, si la cuota está en automático). */
 function proyeccion() {
   const f = hoy();
-  const ya = apartadoDelDia(f);
-  const yaCuentas = datos.registros.filter((r) => r.fecha === f).reduce((s, r) => s + sumar(r.reparto), 0);
+  const desde = L.sumarDias(f, -(frec().periodo - 1));
+  const delPeriodo = datos.registros.filter((r) => r.fecha >= desde && r.fecha <= f);
+  const ya = delPeriodo.reduce((s, r) => s + r.apartado, 0);
+  const yaCuentas = delPeriodo.reduce((s, r) => s + sumar(r.reparto), 0);
   const fraccion = 1 - Math.min(90, datos.ahorroPct || 0) / 100; // parte que va a cuentas
   const cuotaCuentas = Math.round((datos.cuotaDiaria || 0) * fraccion);
   let p = L.plan(activas(), f, { ...datos, cuotaDiaria: cuotaCuentas }, yaCuentas);
@@ -202,6 +286,7 @@ function render() {
   nav.hidden = !datos.configurado;
   $$('button', nav).forEach((b) => b.classList.toggle('activa', b.dataset.vista === vista));
   const c = $('#contenido');
+  pintarPerfiles();
   if (bloqueada) { nav.hidden = true; return pantallaBloqueo(c); }
   if (!datos.configurado) return pantallaInicio(c);
   ({ hoy: pantallaHoy, sobres: pantallaPagos, ahorro: pantallaAhorro, historial: pantallaHistorial, ajustes: pantallaAjustes }[vista] || pantallaHoy)(c);
@@ -246,23 +331,32 @@ function botonesNumero(nombre, desde, hasta, actual) {
 }
 
 function preguntasTrabajo() {
+  const f = datos.frecuencia || 'diario';
   return `
-    <label>¿Cuánto quiere apartar cada día que trabaja?</label>
+    <label>¿Cada cuánto le entra plata?</label>
+    <div class="dias frecuencias">${Object.entries(FRECUENCIAS).map(([k, v]) =>
+      `<label><input type="radio" name="frecuencia" value="${k}" ${k === f ? 'checked' : ''}><span>${v.nombre}</span></label>`).join('')}</div>
+    <label>¿Cuánto quiere apartar ${(FRECUENCIAS[f] || FRECUENCIAS.diario).cada}?</label>
     ${campoPesos('cuotaDiaria', datos.cuotaDiaria)}
     <p class="suave">La app reparte esa plata entre los pagos, primero lo que vence antes, y le avisa si no alcanza. Deje en $0 para que la app calcule cuánto hace falta.</p>
+    <div ${f === 'diario' ? '' : 'hidden'} data-solo-diario>
     <label>¿Cuántos días trabaja a la semana, más o menos?</label>
     ${botonesNumero('diasSemana', 1, 7, datos.diasSemana)}
     <p class="suave">Si a veces falla por un imprevisto, ponga un número más bajo. Mejor que sobre a que falte.</p>
+    </div>
     <label>¿Cuántos días antes del pago quiere tener la plata lista?</label>
     ${botonesNumero('margen', 0, 4, datos.margen)}
     <p class="suave">Es un colchón: si justo antes del pago no se puede trabajar, la plata ya está.</p>`;
 }
 function leerTrabajo(fd) {
+  if (fd.get('frecuencia')) datos.frecuencia = fd.get('frecuencia');
   const cfg = L.ajustes({ diasSemana: fd.get('diasSemana'), margen: fd.get('margen') });
   datos.diasSemana = cfg.diasSemana;
   datos.margen = cfg.margen;
   if (fd.has('cuotaDiaria')) datos.cuotaDiaria = num(fd.get('cuotaDiaria'));
 }
+
+const plantillaPerfil = () => (datos.perfil === 'mama' ? PLANTILLA : PLANTILLA_PERSONAL);
 
 function filaPago(p, i) {
   const cuando = p.tipo === 'semanal'
@@ -291,7 +385,7 @@ function pantallaInicio(c) {
   c.innerHTML = `
     <div class="tarjeta destacada">
       <p class="cifra-m">Hola 👋</p>
-      <p>Esta app le dice, cada día que trabaja, <b>cuánto guardar</b> y para qué, para que el día de pagar la plata ya esté lista.</p>
+      <p>Perfil <b>${esc(datos.perfilNombre || 'Mamá')}</b>. Esta app le dice, cada vez que le entra plata, <b>cuánto guardar</b> y para qué, para que el día de pagar la plata ya esté lista.</p>
       <p class="suave">Llene solo lo que aplique. Lo que deje sin valor no se agrega. Todo se puede cambiar después.</p>
     </div>
     ${Nube.disponible && !Nube.sesion ? `<div class="tarjeta"><p>¿Ya tiene cuenta (por ejemplo, en otro celular)?</p>
@@ -300,13 +394,16 @@ function pantallaInicio(c) {
       <h2>¿Cómo trabaja?</h2>
       ${preguntasTrabajo()}
       <h2>Lo que hay que pagar</h2>
-      <div class="rejilla" id="filas">${PLANTILLA.map(filaPago).join('')}</div>
+      <div class="rejilla" id="filas">${plantillaPerfil().map(filaPago).join('')}</div>
       <button type="button" id="btn-otra-fila">+ Agregar otro pago</button>
       <button type="submit" class="principal">Empezar</button>
     </form>`;
 
   if ($('#btn-ya-tengo')) $('#btn-ya-tengo').onclick = dialogoCuenta;
-  let filas = PLANTILLA.length;
+  let filas = plantillaPerfil().length;
+  $('#form-inicio').addEventListener('change', (e) => {
+    if (e.target.name === 'frecuencia') $('[data-solo-diario]').hidden = e.target.value !== 'diario';
+  });
   $('#btn-otra-fila').onclick = () => {
     $('#filas').insertAdjacentHTML('beforeend', filaPago({ nombre: '', tipo: 'mensual', prioridad: 2, deuda: true }, filas));
     $(`[name=nombre-${filas}]`).focus();
@@ -352,7 +449,8 @@ function pantallaInicio(c) {
 /** Cuánto hay que apartar al día en un mes normal (sin atrasos), según los pagos y los días de trabajo. */
 function cuotaMesNormal() {
   const porMes = activas().reduce((s, o) => s + (o.tipo === 'semanal' ? (o.monto * 52) / 12 : o.tipo === 'mensual' ? o.monto : 0), 0);
-  return L.redondearMil(porMes / ((datos.diasSemana * 365) / 12 / 7));
+  const vecesPorSemana = L.ajustes(datos).diasSemana;
+  return L.redondearMil(porMes / ((vecesPorSemana * 365) / 12 / 7));
 }
 
 function avisoPlan(p) {
@@ -362,16 +460,16 @@ function avisoPlan(p) {
   const normal = cuotaMesNormal();
   const normalTotal = L.redondearMil(normal / (p.fraccion || 1));
   const conAhorro = datos.ahorroPct ? ` (contando el ${datos.ahorroPct}% para ahorro)` : '';
-  const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normalTotal)}</b> diarios${conAhorro}, trabajando ${datos.diasSemana} días a la semana.</p>` : '';
+  const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normalTotal)}</b> ${frec().por}${conAhorro}${datos.frecuencia === 'diario' || !datos.frecuencia ? `, trabajando ${datos.diasSemana} días a la semana` : ''}.</p>` : '';
   if (!malos.length) {
-    return `<div class="alerta verde">✔ Con ${cuota} diarios alcanza para todo lo del próximo mes.${lineaNormal}</div>`;
+    return `<div class="alerta verde">✔ Con ${cuota} ${frec().por} alcanza para todo lo del próximo mes.${lineaNormal}</div>`;
   }
   return `
     <div class="alerta ambar">
-      Con ${cuota} diarios no alcanza para:
+      Con ${cuota} ${frec().por} no alcanza para:
       <ul class="lista" style="margin:6px 0">${malos.slice(0, 4).map((x) =>
         `<li><span>${esc(x.nombre)} <span class="suave">(${fechaCorta(x.fecha)})</span></span><span class="monto">faltan ${pesos(x.faltante)}</span></li>`).join('')}</ul>
-      Para cubrir todo a tiempo habría que apartar <b>${pesos(p.necesariaTotal || p.necesaria)}</b> al día${conAhorro}, trabajar más días, o abonar de otro lado.
+      Para cubrir todo a tiempo habría que apartar <b>${pesos(p.necesariaTotal || p.necesaria)}</b> ${frec().por}${conAhorro}, conseguir más ingresos, o abonar de otro lado.
       ${lineaNormal}
     </div>`;
 }
@@ -406,9 +504,9 @@ function pantallaHoy(c) {
   c.innerHTML = `
     <div class="columnas"><div>
     <div class="tarjeta destacada">
-      <p class="suave">${p.ya ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar'}</p>
+      <p class="suave">${datos.frecuencia && datos.frecuencia !== 'diario' ? (p.ya ? `Todavía le falta apartar de este ${frec().pago}` : 'Cuando le paguen, aparte') : (p.ya ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar')}</p>
       <p class="cifra">${pesos(p.pendienteHoy)}</p>
-      <p class="suave">${p.pendienteHoy ? (p.automatica ? 'para que alcance para todos los pagos.' : `de la cuota diaria de ${pesos(p.objetivo)}.`) : '¡Listo por hoy! 💪'}</p>
+      <p class="suave">${p.pendienteHoy ? (p.automatica ? 'para que alcance para todos los pagos.' : `de la cuota de ${pesos(p.objetivo)} ${frec().por}.`) : (datos.frecuencia && datos.frecuencia !== 'diario' ? `¡Listo! Ya apartó lo de este ${frec().pago}. 💪` : '¡Listo por hoy! 💪')}</p>
     </div>
     ${avisoPlan(p)}
 
@@ -478,7 +576,7 @@ function explicarReparto(r, apartar) {
     <ul class="lista reparto">
       ${conPlata.map(({ o, d, m }) => `
         <li><span><b>${esc(o.nombre)}</b><br>
-          <span class="suave">Faltan ${pesos(d.falta)} · vence ${fechaCorta(d.fecha)} · ${d.dias <= 1 ? 'ya se debe juntar' : `${d.dias} días de trabajo`} → necesita ${pesos(d.necesidad)} al día</span></span>
+          <span class="suave">Faltan ${pesos(d.falta)} · vence ${fechaCorta(d.fecha)} · ${d.dias <= 1 ? (datos.frecuencia && datos.frecuencia !== 'diario' ? `vence antes del próximo ${frec().pago} → toca completo` : 'ya se debe juntar → toca completo') : `${d.dias} ${frec().pagos} → necesita ${pesos(d.necesidad)} ${frec().por}`}</span></span>
           <span class="monto">${pesos(m)}</span></li>`).join('')}
       ${Object.entries(r.ahorro || {}).map(([id, m]) => `
         <li><span><b>💰 ${esc(buscarMeta(id)?.nombre || 'Ahorro')}</b><br><span class="suave">Ahorro${r.sobroDeCuentas ? ' (incluye lo que sobró: las cuentas ya tienen lo suyo de hoy)' : ''}</span></span><span class="monto">${pesos(m)}</span></li>`).join('')}
@@ -538,8 +636,8 @@ function lineaPlan(o, faltantes) {
   const f = faltantes[o.id];
   if (f == null) return '';
   return f > 0
-    ? `<p class="alerta ambar" style="margin:8px 0 0;padding:8px 12px">Con la cuota diaria faltarían ${pesos(f)}</p>`
-    : '<p class="suave">✔ Con la cuota diaria llega completo</p>';
+    ? `<p class="alerta ambar" style="margin:8px 0 0;padding:8px 12px">Con la cuota faltarían ${pesos(f)}</p>`
+    : '<p class="suave">✔ Con la cuota llega completo</p>';
 }
 
 function tarjetaCorta(o, f, faltantes) {
@@ -862,7 +960,7 @@ function pantallaAhorro(c) {
         <div class="dias" style="grid-template-columns:repeat(7,minmax(0,1fr))">${[0, 5, 10, 15, 20, 25, 30].map((n) =>
           `<label><input type="radio" name="ahorroPct" value="${n}" ${n === pct ? 'checked' : ''}><span>${n}%</span></label>`).join('')}</div>
         <p class="suave" style="margin-top:10px">${pct
-          ? `Se aparta primero, antes de las cuentas${cuota ? `: de ${pesos(cuota)} diarios, ${pesos(Math.round((cuota * pct) / 100 / 1000) * 1000)} van a ahorro` : ''}.`
+          ? `Se aparta primero, antes de las cuentas${cuota ? `: de ${pesos(cuota)} ${frec().por}, ${pesos(Math.round((cuota * pct) / 100 / 1000) * 1000)} van a ahorro` : ''}.`
           : 'Hoy no se aparta nada primero para ahorro.'} Además, lo que sobre después de cubrir las cuentas siempre va a ahorro.</p>
         ${pct && !p.alcanza ? `<div class="alerta ambar">Con este porcentaje las cuentas no alcanzan a cubrirse a tiempo (vea "Hoy"). Puede bajarlo mientras se pone al día.</div>` : ''}
       </form>
@@ -1039,13 +1137,23 @@ function pantallaAjustes(c) {
     <div class="rejilla">
     <div><h2>Cuenta en la nube</h2>
     <div class="tarjeta" id="tarjeta-cuenta">${tarjetaCuenta()}</div>
+    <h2>Perfil</h2>
+    <form class="tarjeta" id="form-perfil">
+      <label>Nombre de este perfil</label>
+      <input name="nombre" value="${esc(datos.perfilNombre || 'Mamá')}" maxlength="20">
+      <div class="botones">
+        <button class="principal" style="margin:0;flex:1">Guardar nombre</button>
+        ${datos.perfil !== 'mama' ? '<button type="button" class="peligro" id="btn-borrar-perfil">Borrar perfil</button>' : ''}
+      </div>
+      <p class="suave">Para cambiar de perfil o crear otro, use los botones de arriba.</p>
+    </form>
     <h2>Banco</h2>
     <form class="tarjeta" id="form-banco">
       <label>¿En qué banco o app guarda la plata?</label>
       <input name="banco" value="${esc(banco())}" maxlength="30" placeholder="Nu">
       <p class="suave">Se usa en los textos ("Hoy mueva en Nu…").</p>
     </form>
-    <h2>Cuota y días de trabajo</h2>
+    <h2>Ingresos y cuota</h2>
     <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form></div>
 
     <div><h2>De dónde entra la plata</h2>
@@ -1087,6 +1195,27 @@ function pantallaAjustes(c) {
     </div>`;
 
   activarCuenta();
+  $('#form-perfil').onsubmit = (e) => {
+    e.preventDefault();
+    const nombre = String(new FormData(e.currentTarget).get('nombre') || '').trim();
+    if (!nombre) return avisar('Falta el nombre');
+    datos.perfilNombre = nombre;
+    const p = perfiles.lista.find((x) => x.id === datos.perfil);
+    if (p) p.nombre = nombre;
+    guardarPerfiles(); guardar(); avisar('Guardado'); render();
+  };
+  if ($('#btn-borrar-perfil')) $('#btn-borrar-perfil').onclick = async () => {
+    if (!(await preguntar(`¿Borrar el perfil "${datos.perfilNombre}" con todas sus cuentas, metas y registros${Nube.sesion ? ', también en la nube' : ''}? No se puede deshacer.`, 'Borrar perfil'))) return;
+    const id = datos.perfil;
+    try { await Nube.borrarPerfil(id); } catch (err) { avisar('No se pudo borrar en la nube'); return; }
+    try { localStorage.removeItem(claveDatos(id)); } catch (err) { /* nada */ }
+    perfiles.lista = perfiles.lista.filter((x) => x.id !== id);
+    perfiles.activo = 'mama';
+    guardarPerfiles();
+    datos = cargar('mama');
+    vista = 'hoy';
+    render();
+  };
   $('#form-banco').onchange = (e) => {
     datos.banco = String(new FormData(e.currentTarget).get('banco') || '').trim() || 'Nu';
     guardar(); avisar('Guardado');
@@ -1095,6 +1224,7 @@ function pantallaAjustes(c) {
     leerTrabajo(new FormData(e.currentTarget));
     guardar();
     avisar('Guardado');
+    if (e.target.name === 'frecuencia') render();
   };
 
   $('#btn-fuente').onclick = () => {
@@ -1165,7 +1295,8 @@ function pantallaAjustes(c) {
     const msg = Nube.sesion ? '¿Seguro? Se borra todo lo registrado, en este teléfono Y en la nube.' : '¿Seguro? Se borra todo lo registrado en este teléfono.';
     if (!(await preguntar(msg, 'Borrar todo'))) return;
     const borrados = { obligaciones: datos.obligaciones.map((x) => x.id), registros: datos.registros.map((x) => x.id), pagos: datos.pagos.map((x) => x.id), metas: (datos.metas || []).map((x) => x.id) };
-    datos = estadoNuevo();
+    const perfilActual = { perfil: datos.perfil, perfilNombre: datos.perfilNombre };
+    datos = { ...estadoNuevo(), ...perfilActual };
     datos.borrados = borrados;
     guardar();
     ir('hoy');
@@ -1291,9 +1422,22 @@ async function iniciarNube() {
   Nube.onSubido(guardarLocal); // la lista de borrados ya se aplicó en la nube
   await Nube.iniciar();
   pintarEstadoNube();
+  await traerPerfilesDeLaNube();
   await traerDeLaNube(true);
 }
-window.addEventListener('online', () => { if (Nube.sesion && Nube.pendiente) Nube.subirAhora(datos); });
+/** Si en otro celular se creó un perfil, que aparezca aquí también. */
+async function traerPerfilesDeLaNube() {
+  if (!Nube.sesion) return;
+  const remotos = await Nube.listarPerfiles();
+  let cambio = false;
+  for (const r of remotos) {
+    const local = perfiles.lista.find((p) => p.id === r.id);
+    if (!local) { perfiles.lista.push({ id: r.id, nombre: r.nombre || r.id }); cambio = true; }
+    else if (r.nombre && local.nombre !== r.nombre) { local.nombre = r.nombre; cambio = true; }
+  }
+  if (cambio) { guardarPerfiles(); datos.perfilNombre = nombrePerfil(datos.perfil); pintarPerfiles(); }
+}
+window.addEventListener('online', () => { if (Nube.sesion && Nube.hayPendiente(datos.perfil)) Nube.subirAhora(datos); });
 
 /* ---------- CLAVE ----------
  * Candado local: los datos nunca salen del teléfono, así que la clave solo evita

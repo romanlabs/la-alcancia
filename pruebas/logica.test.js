@@ -247,3 +247,26 @@ test('repartirTodo: primero el % de ahorro, luego cuentas, y lo que sobra de las
   const sinPct = L.repartirTodo(obs, metas, 40000, '2026-11-12', { diasSemana: 7, margen: 0 });
   assert.equal(sinPct.primeroAhorro, 0);
 });
+
+/* ---------- frecuencia de ingresos (perfiles con sueldo) ---------- */
+test('ajustes: la frecuencia define cuántas veces por semana entra plata', () => {
+  assert.equal(L.ajustes({ frecuencia: 'semanal' }).diasSemana, 1);
+  assert.ok(Math.abs(L.ajustes({ frecuencia: 'mensual' }).diasSemana - 7 / 30) < 1e-9);
+  assert.equal(L.ajustes({ frecuencia: 'diario', diasSemana: 5 }).diasSemana, 5);
+});
+
+test('sueldo mensual: si el pago vence antes del próximo sueldo, se aparta todo de una vez', () => {
+  const cfg = { frecuencia: 'mensual', margen: 0 };
+  // arriendo 600.000 el 5 del otro mes; hoy llega el sueldo (30 nov) → no hay otro sueldo antes → todo hoy
+  const n = L.necesidadDiaria(600000, '2026-11-30', '2026-12-05', cfg);
+  assert.equal(n.necesidad, 600000);
+  // dentro de 2 meses: se reparte en 2 sueldos
+  const n2 = L.necesidadDiaria(600000, '2026-11-30', '2027-01-29', cfg);
+  assert.equal(n2.necesidad, 300000);
+});
+
+test('sueldo quincenal: plan con cuota por quincena', () => {
+  const cfg = { frecuencia: 'quincenal', margen: 0, cuotaDiaria: 400000, horizonte: 31 };
+  const p = L.plan([ob({ id: 'arriendo', dia: 5, monto: 600000, proximo: '2026-12-05' })], '2026-11-15', cfg);
+  assert.equal(p.alcanza, true); // 2 quincenas antes del 5 dic: 800.000
+});

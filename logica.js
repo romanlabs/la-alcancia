@@ -67,8 +67,13 @@
   }
 
   /** Normaliza la configuración: días que trabaja por semana (1-7) y días de margen antes del pago (0-7). */
+  /** Cuántas veces por semana entra plata según la frecuencia (diario usa los días que trabaja). */
+  const VECES_POR_SEMANA = { semanal: 1, quincenal: 7 / 15, mensual: 7 / 30 };
+
   function ajustes(cfg = {}) {
-    const diasSemana = Math.min(7, Math.max(1, Math.round(Number(cfg.diasSemana) || 7)));
+    const fija = VECES_POR_SEMANA[cfg.frecuencia];
+    // "diasSemana" = veces por semana que entra plata (puede ser fracción: quincenal ≈ 0,47; mensual ≈ 0,23)
+    const diasSemana = fija || Math.min(7, Math.max(1, Math.round(Number(cfg.diasSemana) || 7)));
     const margen = Math.min(7, Math.max(0, Math.round(Number(cfg.margen) || 0)));
     return { diasSemana, margen };
   }

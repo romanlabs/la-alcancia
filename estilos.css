@@ -257,3 +257,15 @@ details.detalle-dia summary { cursor: pointer; font-weight: 600; min-height: 44p
 /* Reparto explicado */
 .lista.reparto li { align-items: flex-start; }
 .lista.reparto .suave { font-size: .85rem; }
+
+/* Selector de perfil (Mamá / Yo / +) */
+.perfiles { max-width: 1000px; margin: 0 auto; padding: 0 16px 4px; display: flex; gap: 8px; overflow-x: auto; }
+.perfiles[hidden] { display: none; }
+.perfil { min-height: 40px; padding: 8px 16px; border-radius: 99px; background: var(--tarjeta); border: 2px solid var(--borde);
+  color: var(--suave); font-size: .95rem; white-space: nowrap; }
+.perfil.activo { background: var(--verde); border-color: var(--verde); color: #fff; }
+@media (prefers-color-scheme: dark) { .perfil.activo { color: #0f1f17; } }
+.perfil.mas { padding: 8px 14px; }
+/* Frecuencia de ingresos: 2 columnas */
+.dias.frecuencias { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dias.frecuencias label { font-size: .85rem; padding: 0 6px; text-align: center; }

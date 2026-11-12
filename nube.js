@@ -23,8 +23,11 @@ const Nube = (() => {
   let alCambiar = () => {};
   let alSubir = () => {};
 
-  const marcar = (v) => { try { v ? localStorage.setItem(PENDIENTE, '1') : localStorage.removeItem(PENDIENTE); } catch (e) { /* nada */ } };
-  const hayPendiente = () => { try { return localStorage.getItem(PENDIENTE) === '1'; } catch (e) { return false; } };
+  // "pendiente" por perfil (el de mamá conserva la clave de antes)
+  const clavePendiente = (perfil) => (!perfil || perfil === 'mama' ? PENDIENTE : `${PENDIENTE}:${perfil}`);
+  const marcar = (v, perfil) => { try { v ? localStorage.setItem(clavePendiente(perfil), '1') : localStorage.removeItem(clavePendiente(perfil)); } catch (e) { /* nada */ } };
+  const hayPendiente = (perfil) => { try { return localStorage.getItem(clavePendiente(perfil)) === '1'; } catch (e) { return false; } };
+  const perfilDe = (datos) => (datos && datos.perfil) || 'mama';
   const poner = (e) => { estado = e; alCambiar(); };
   const num = (x) => (x == null ? 0 : Number(x));
 
@@ -79,19 +82,22 @@ const Nube = (() => {
   async function subir(datos) {
     if (!sb || !sesion) return;
     const uid = sesion.user.id;
+    const perfil = perfilDe(datos);
     poner('subiendo');
     try {
       await chequear(sb.from('configuracion').upsert({
-        user_id: uid, configurado: !!datos.configurado, dias_semana: datos.diasSemana, margen: datos.margen,
+        user_id: uid, perfil, perfil_nombre: datos.perfilNombre || 'Mamá', frecuencia: datos.frecuencia || 'diario',
+        configurado: !!datos.configurado, dias_semana: datos.diasSemana, margen: datos.margen,
         cuota_diaria: datos.cuotaDiaria || 0, fuentes: datos.fuentes, extra: datos.extra || 0,
         ahorro_pct: datos.ahorroPct || 0, banco: datos.banco || 'Nu',
         actualizado: new Date().toISOString(),
-      }));
+      }, { onConflict: 'user_id,perfil' }));
+      const conPerfil = (f) => ({ ...f, perfil });
       const tablas = [
-        ['obligaciones', datos.obligaciones.map((o) => aFilaObligacion(o, uid))],
-        ['registros', datos.registros.map((r) => aFilaRegistro(r, uid))],
-        ['pagos', datos.pagos.map((p) => aFilaPago(p, uid))],
-        ['metas', (datos.metas || []).map((m) => aFilaMeta(m, uid))],
+        ['obligaciones', datos.obligaciones.map((o) => conPerfil(aFilaObligacion(o, uid)))],
+        ['registros', datos.registros.map((r) => conPerfil(aFilaRegistro(r, uid)))],
+        ['pagos', datos.pagos.map((p) => conPerfil(aFilaPago(p, uid)))],
+        ['metas', (datos.metas || []).map((m) => conPerfil(aFilaMeta(m, uid)))],
       ];
       for (const [tabla, filas] of tablas) {
         if (filas.length) await chequear(sb.from(tabla).upsert(filas));
@@ -103,34 +109,35 @@ const Nube = (() => {
           datos.borrados[tabla] = datos.borrados[tabla].filter((id) => !borrar.includes(id));
         }
       }
-      marcar(false);
+      marcar(false, perfil);
       alSubir();
       poner('al-dia');
     } catch (e) {
       console.warn('[nube] no se pudo subir', e);
-      marcar(true);
+      marcar(true, perfil);
       poner('error');
     }
   }
 
   /** Baja todo de la nube. Devuelve null si el usuario todavía no tiene nada guardado. */
-  async function bajar() {
+  async function bajar(perfil = 'mama') {
     if (!sb || !sesion) return null;
     poner('bajando');
     try {
-      const [conf] = await chequear(sb.from('configuracion').select('*').limit(1));
+      const [conf] = await chequear(sb.from('configuracion').select('*').eq('perfil', perfil).limit(1));
       if (!conf) { poner('al-dia'); return null; }
       const [obs, regs, pags, mets] = await Promise.all([
-        chequear(sb.from('obligaciones').select('*')),
-        chequear(sb.from('registros').select('*').order('fecha')),
-        chequear(sb.from('pagos').select('*').order('fecha')),
-        chequear(sb.from('metas').select('*').order('actualizado')),
+        chequear(sb.from('obligaciones').select('*').eq('perfil', perfil)),
+        chequear(sb.from('registros').select('*').eq('perfil', perfil).order('fecha')),
+        chequear(sb.from('pagos').select('*').eq('perfil', perfil).order('fecha')),
+        chequear(sb.from('metas').select('*').eq('perfil', perfil).order('actualizado')),
       ]);
       poner('al-dia');
       return {
         configurado: conf.configurado, diasSemana: conf.dias_semana, margen: conf.margen,
         cuotaDiaria: num(conf.cuota_diaria), fuentes: conf.fuentes, extra: num(conf.extra),
         ahorroPct: conf.ahorro_pct || 0, metas: mets.map(deFilaMeta), banco: conf.banco || 'Nu',
+        frecuencia: conf.frecuencia || 'diario', perfilNombre: conf.perfil_nombre,
         obligaciones: obs.map(deFilaObligacion), registros: regs.map(deFilaRegistro), pagos: pags.map(deFilaPago),
       };
     } catch (e) {
@@ -185,10 +192,11 @@ const Nube = (() => {
     async sincronizar(datosLocales, preguntarCual) {
       if (!sb || !sesion) return null;
       const uid = sesion.user.id;
+      const perfil = perfilDe(datosLocales);
       let anterior = null;
       try { anterior = localStorage.getItem(ULTIMO_USUARIO); } catch (e) { /* nada */ }
-      if (anterior === uid && hayPendiente()) await subir(datosLocales);
-      const remotos = await bajar();
+      if (anterior === uid && hayPendiente(perfil)) await subir(datosLocales);
+      const remotos = await bajar(perfil);
       if (remotos === undefined) return null; // sin conexión
       const localConDatos = datosLocales.configurado && datosLocales.obligaciones.length;
       let usar = null;
@@ -199,7 +207,7 @@ const Nube = (() => {
         const cual = await preguntarCual();
         if (cual === 'celular') {
           await subir(datosLocales); // junta: sube lo del celular sin borrar lo de la nube
-          usar = await bajar();
+          usar = await bajar(perfil);
           if (usar === undefined) usar = null;
         } else {
           usar = remotos;
@@ -214,13 +222,37 @@ const Nube = (() => {
     /** Después de cada cambio: espera un momento (por si hay más cambios) y sube. */
     programarSubida(obtenerDatos) {
       if (!sb) return;
-      marcar(true);
+      const datos = obtenerDatos();
+      marcar(true, perfilDe(datos));
       if (!sesion) return;
       clearTimeout(temporizador);
-      temporizador = setTimeout(() => subir(obtenerDatos()), 1500);
+      temporizador = setTimeout(() => subir(datos), 1500);
     },
 
-    get pendiente() { return hayPendiente(); },
+    /** Sube ya lo que esté esperando (por ejemplo, antes de cambiar de perfil). */
+    async subirSiPendiente(datos) {
+      clearTimeout(temporizador);
+      if (sb && sesion && hayPendiente(perfilDe(datos))) await subir(datos);
+    },
+
+    hayPendiente,
+
+    /** Perfiles guardados en la nube: [{ id, nombre }]. */
+    async listarPerfiles() {
+      if (!sb || !sesion) return [];
+      try {
+        const filas = await chequear(sb.from('configuracion').select('perfil, perfil_nombre').order('perfil'));
+        return filas.map((f) => ({ id: f.perfil, nombre: f.perfil_nombre }));
+      } catch (e) { return []; }
+    },
+
+    /** Borra en la nube todo lo de un perfil. */
+    async borrarPerfil(perfil) {
+      if (!sb || !sesion || !perfil || perfil === 'mama') return;
+      for (const t of ['registros', 'pagos', 'metas', 'obligaciones', 'configuracion']) {
+        await chequear(sb.from(t).delete().eq('perfil', perfil));
+      }
+    },
 
     subirAhora: subir,
   };
