@@ -898,7 +898,7 @@ function editar(id) {
       <option value="3" ${o.prioridad === 3 ? 'selected' : ''}>Puede esperar</option>
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
-    ${campoCajita(o.bolsillo, CAJITA_CUENTAS)}
+    ${campoCajita(o.bolsillo, cajitaCuentas())}
     <label>Nota <span class="suave">(opcional)</span></label>
     <input name="nota" value="${esc(o.nota)}" placeholder="Ej: número de contrato, a quién se le paga…" maxlength="160">
     ${botonesModal(!!id)}
@@ -959,9 +959,12 @@ function editar(id) {
 }
 
 /* ---------- CAJITAS (bolsillos en el banco, p. ej. Nu) ---------- */
-const CAJITA_CUENTAS = 'Cuentas por pagar';
+// Mamá usa los nombres de siempre; los otros perfiles, nombres propios para no mezclar la plata en el banco.
+const esMama = () => (datos.perfil || 'mama') === 'mama';
+const cajitaCuentas = () => (esMama() ? 'Cuentas por pagar' : 'Mis cuentas');
+const cajitaMeta = (nombre) => (esMama() ? nombre : `${nombre} (${datos.perfilNombre || 'mío'})`);
 const banco = () => datos.banco || 'Nu';
-const cajitaDe = (x, esMeta) => (x && x.bolsillo) || (esMeta ? x.nombre : CAJITA_CUENTAS);
+const cajitaDe = (x, esMeta) => (x && x.bolsillo) || (esMeta ? cajitaMeta(x.nombre) : cajitaCuentas());
 
 /** Cuánto mover hoy a cada cajita, juntando lo que va a cuentas y a metas. */
 function movimientosCajitas(r) {
@@ -996,7 +999,7 @@ function tarjetaCuadre() {
 
 /** Campo para escoger la cajita (con las que ya existen como sugerencia). */
 function campoCajita(valor, porDefecto) {
-  const usadas = [...new Set([CAJITA_CUENTAS, ...datos.obligaciones.map((o) => o.bolsillo), ...(datos.metas || []).map((m) => m.bolsillo || m.nombre)].filter(Boolean))];
+  const usadas = [...new Set([cajitaCuentas(), ...datos.obligaciones.map((o) => o.bolsillo), ...(datos.metas || []).map((m) => m.bolsillo || cajitaMeta(m.nombre))].filter(Boolean))];
   return `<label>¿En qué cajita de ${esc(banco())} la guarda?</label>
     <input name="bolsillo" list="lista-cajitas" value="${esc(valor || '')}" placeholder="${esc(porDefecto)}" maxlength="40">
     <datalist id="lista-cajitas">${usadas.map((u) => `<option value="${esc(u)}">`).join('')}</datalist>
@@ -1081,9 +1084,9 @@ function pantallaAhorro(c) {
     <h2>Cómo usar las cajitas de ${esc(banco())}</h2>
     <div class="tarjeta">
       <ul class="lista">
-        <li><span>Cree en ${esc(banco())} una cajita <b>"${CAJITA_CUENTAS}"</b> y una por cada meta (por ejemplo "Fondo de emergencias" y "Para invertir").</span></li>
+        <li><span>Cree en ${esc(banco())} una cajita <b>"${cajitaCuentas()}"</b> y una por cada meta (por ejemplo "${cajitaMeta('Fondo de emergencias')}" y "${cajitaMeta('Para invertir')}").</span></li>
         <li><span>Cada día, después de "Listo, ya lo aparté", haga en ${esc(banco())} los movimientos que dice la app.</span></li>
-        <li><span>Cuando pague un recibo, sáquelo de "${CAJITA_CUENTAS}" y marque "Ya pagué" en la app.</span></li>
+        <li><span>Cuando pague un recibo, sáquelo de "${cajitaCuentas()}" y marque "Ya pagué" en la app.</span></li>
         <li><span>Si quiere una cajita por cada recibo (más orden, más movimientos), póngale el nombre en "Editar" de cada pago.</span></li>
         <li><span>Una vez por semana compare el "Cuadre" de la app con lo que muestra ${esc(banco())}.</span></li>
       </ul>
@@ -1127,7 +1130,7 @@ function dialogoMeta(id) {
     <input name="porcentaje" inputmode="numeric" maxlength="3" value="${m.porcentaje ?? 50}">
     <p class="suave">Se compara con las otras metas: si dos metas tienen 50, cada una recibe la mitad.</p>
     ${id ? `<label>Ya ahorrado</label>${campoPesos('ahorrado', m.ahorrado)}` : ''}
-    ${campoCajita(m.bolsillo, m.nombre || 'el nombre de la meta')}
+    ${campoCajita(m.bolsillo, m.nombre ? cajitaMeta(m.nombre) : 'el nombre de la meta')}
     <label>Nota <span class="suave">(opcional)</span></label><input name="nota" value="${esc(m.nota)}" maxlength="160">
     ${botonesModal(!!id)}
   `, (fd, boton) => {
