@@ -239,3 +239,11 @@ dialog.confirmar { max-width: 420px; }
 dialog.confirmar p { font-size: 1.05rem; font-weight: 600; margin: 4px 0 0; }
 @media (max-width: 599px) { dialog.confirmar { max-height: none; } }
 button.peligro-fuerte { background: var(--rojo); color: #fff; }
+
+/* Estado de la nube en la barra de arriba */
+.derecha-barra { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.derecha-barra #fecha-hoy { color: var(--suave); font-size: .9rem; }
+.derecha-barra #fecha-hoy::first-letter { text-transform: uppercase; }
+.nube { font-size: .78rem; font-weight: 600; color: var(--verde); }
+.nube.error { color: var(--ambar); }
+.nube:empty { display: none; }

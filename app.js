@@ -94,12 +94,16 @@ function cargar() {
   } catch (e) { /* sin almacenamiento: empieza vacío */ }
   return estadoNuevo();
 }
-function guardar() {
+function guardarLocal() {
   try {
     localStorage.setItem(CLAVE, JSON.stringify(datos));
   } catch (e) {
     avisar('No se pudo guardar en este teléfono');
   }
+}
+function guardar() {
+  guardarLocal();
+  if (typeof Nube !== 'undefined') Nube.programarSubida(() => datos);
 }
 
 let datos = cargar();
@@ -258,6 +262,8 @@ function pantallaInicio(c) {
       <p>Esta app le dice, cada día que trabaja, <b>cuánto guardar</b> y para qué, para que el día de pagar la plata ya esté lista.</p>
       <p class="suave">Llene solo lo que aplique. Lo que deje sin valor no se agrega. Todo se puede cambiar después.</p>
     </div>
+    ${Nube.disponible && !Nube.sesion ? `<div class="tarjeta"><p>¿Ya tiene cuenta (por ejemplo, en otro celular)?</p>
+      <button type="button" id="btn-ya-tengo">Entrar con mi cuenta</button></div>` : ''}
     <form id="form-inicio">
       <h2>¿Cómo trabaja?</h2>
       ${preguntasTrabajo()}
@@ -267,6 +273,7 @@ function pantallaInicio(c) {
       <button type="submit" class="principal">Empezar</button>
     </form>`;
 
+  if ($('#btn-ya-tengo')) $('#btn-ya-tengo').onclick = dialogoCuenta;
   let filas = PLANTILLA.length;
   $('#btn-otra-fila').onclick = () => {
     $('#filas').insertAdjacentHTML('beforeend', filaPago({ nombre: '', tipo: 'mensual', prioridad: 2, deuda: true }, filas));
@@ -736,7 +743,9 @@ function pantallaHistorial(c) {
 function pantallaAjustes(c) {
   c.innerHTML = `
     <div class="rejilla">
-    <div><h2>Cuota y días de trabajo</h2>
+    <div><h2>Cuenta en la nube</h2>
+    <div class="tarjeta" id="tarjeta-cuenta">${tarjetaCuenta()}</div>
+    <h2>Cuota y días de trabajo</h2>
     <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form></div>
 
     <div><h2>De dónde entra la plata</h2>
@@ -777,6 +786,7 @@ function pantallaAjustes(c) {
     </div></div>
     </div>`;
 
+  activarCuenta();
   $('#form-trabajo').onchange = (e) => {
     leerTrabajo(new FormData(e.currentTarget));
     guardar();
@@ -843,7 +853,8 @@ function pantallaAjustes(c) {
     }
   };
   $('#btn-borrar').onclick = async () => {
-    if (!(await preguntar('¿Seguro? Se borra todo lo registrado en este teléfono.', 'Borrar todo'))) return;
+    const msg = Nube.sesion ? '¿Seguro? Se borra todo lo registrado, en este teléfono Y en la nube.' : '¿Seguro? Se borra todo lo registrado en este teléfono.';
+    if (!(await preguntar(msg, 'Borrar todo'))) return;
     datos = estadoNuevo();
     guardar();
     ir('hoy');
@@ -854,6 +865,123 @@ function filaFuente(nombre) {
   return `<div class="fila-quitar"><input value="${esc(nombre)}" placeholder="Ej: Uber" maxlength="30" aria-label="Fuente de ingreso">
     <button type="button" class="chico peligro" data-quitar aria-label="Quitar">✕</button></div>`;
 }
+
+/* ---------- CUENTA EN LA NUBE ---------- */
+const TEXTO_NUBE = {
+  'al-dia': '☁ Guardado', subiendo: '☁ Guardando…', bajando: '☁ Actualizando…',
+  error: '⚠ Sin conexión: se guarda cuando vuelva', 'sin-sesion': '', 'no-disponible': '',
+};
+function pintarEstadoNube() {
+  const e = $('#nube-estado');
+  if (e) {
+    e.textContent = TEXTO_NUBE[Nube.estado] || '';
+    e.className = 'nube ' + Nube.estado;
+  }
+  const t = $('#tarjeta-cuenta');
+  if (t && !t.contains(document.activeElement)) { t.innerHTML = tarjetaCuenta(); activarCuenta(); }
+}
+
+function tarjetaCuenta() {
+  if (!Nube.disponible) return '<p class="suave">No se pudo cargar la conexión a la nube. Revise el internet y vuelva a abrir la app.</p>';
+  if (!Nube.sesion) {
+    return `<p class="suave">Sin cuenta, todo queda solo en este celular. Con cuenta, se guarda en la nube: no se pierde si cambia de celular y lo puede ver desde el PC o pgAdmin.</p>
+      <button type="button" class="principal" id="btn-cuenta">Entrar o crear cuenta</button>`;
+  }
+  return `<p>Conectado como <b>${esc(Nube.correo)}</b></p>
+    <p class="suave">${esc(TEXTO_NUBE[Nube.estado] || '')}</p>
+    <div class="botones">
+      <button type="button" id="btn-sincronizar">Actualizar ahora</button>
+      <button type="button" class="peligro" id="btn-salir">Cerrar sesión</button>
+    </div>`;
+}
+function activarCuenta() {
+  if ($('#btn-cuenta')) $('#btn-cuenta').onclick = dialogoCuenta;
+  if ($('#btn-sincronizar')) $('#btn-sincronizar').onclick = async () => { await Nube.subirAhora(datos); await traerDeLaNube(true); avisar('Actualizado'); };
+  if ($('#btn-salir')) $('#btn-salir').onclick = async () => {
+    if (!(await preguntar('¿Cerrar sesión? Los datos siguen en este celular y en la nube.', 'Cerrar sesión'))) return;
+    await Nube.salir();
+    render();
+  };
+}
+
+function dialogoCuenta() {
+  abrirModal(`
+    <h2>Cuenta en la nube</h2>
+    <label>Correo</label><input name="correo" type="email" autocomplete="email" required>
+    <label>Contraseña <span class="suave">(mínimo 8 caracteres)</span></label>
+    <input name="clave" type="password" autocomplete="current-password" minlength="8" required>
+    <p class="suave">"Crear cuenta" solo la primera vez. Le llega un correo para confirmar.</p>
+    <div class="botones acciones">
+      <button value="cancelar" formnovalidate>Cancelar</button>
+      <button value="crear">Crear cuenta</button>
+      <button value="entrar" class="principal">Entrar</button>
+    </div>
+  `, (fd, boton) => {
+    const correo = String(fd.get('correo')).trim();
+    const clave = String(fd.get('clave'));
+    const accion = boton && boton.value === 'crear' ? 'crear' : 'entrar';
+    const botones = $$('#modal-form button');
+    botones.forEach((b) => (b.disabled = true));
+    (async () => {
+      try {
+        if (accion === 'crear') {
+          const r = await Nube.crearCuenta(correo, clave);
+          if (!r.session) {
+            $('#modal').close();
+            avisar('Listo. Revise su correo y toque el enlace para confirmar la cuenta.');
+            return;
+          }
+        } else {
+          await Nube.entrar(correo, clave);
+        }
+        $('#modal').close();
+        avisar('Sesión iniciada');
+        await traerDeLaNube(true);
+        render();
+      } catch (e) {
+        botones.forEach((b) => (b.disabled = false));
+        avisar(traducirError(e));
+      }
+    })();
+    return false; // el diálogo se cierra cuando termine
+  });
+}
+
+function traducirError(e) {
+  const m = String((e && (e.message || e.code)) || '');
+  if (/Invalid login credentials/i.test(m)) return 'Correo o contraseña incorrectos';
+  if (/Email not confirmed/i.test(m)) return 'Falta confirmar el correo: revise su bandeja de entrada';
+  if (/already registered|already been registered/i.test(m)) return 'Ese correo ya tiene cuenta: use "Entrar"';
+  if (/Signups not allowed|signup.*disabled/i.test(m)) return 'No se permiten cuentas nuevas';
+  if (/Password should be/i.test(m)) return 'La contraseña es muy corta o muy sencilla';
+  if (/fetch|network/i.test(m)) return 'Sin conexión a internet';
+  return 'No se pudo: ' + m;
+}
+
+/** Baja lo de la nube y, si cambió algo, lo muestra (sin interrumpir si está escribiendo). */
+async function traerDeLaNube(forzarPintar = false) {
+  if (!Nube.sesion) return;
+  const remotos = await Nube.sincronizar(datos, async () =>
+    (await preguntar('Hay datos en la nube y también en este celular. ¿Cuáles quiere usar? "Usar la nube" reemplaza lo de este celular; "Cancelar" sube lo de este celular a la nube.', 'Usar la nube')) ? 'nube' : 'celular');
+  if (remotos) {
+    const antes = JSON.stringify(datos);
+    datos = migrar({ ...datos, ...remotos });
+    guardarLocal();
+    const ocupado = document.body.classList.contains('escribiendo') || $('#modal').open;
+    if ((antes !== JSON.stringify(datos) || forzarPintar) && !ocupado) render();
+  } else if (forzarPintar) {
+    render();
+  }
+}
+
+async function iniciarNube() {
+  if (typeof Nube === 'undefined' || !Nube.disponible) return;
+  Nube.onCambio(pintarEstadoNube);
+  await Nube.iniciar();
+  pintarEstadoNube();
+  await traerDeLaNube(true);
+}
+window.addEventListener('online', () => { if (Nube.sesion && Nube.pendiente) Nube.subirAhora(datos); });
 
 /* ---------- CLAVE ----------
  * Candado local: los datos nunca salen del teléfono, así que la clave solo evita
@@ -912,6 +1040,7 @@ function pantallaBloqueo(c) {
     e.preventDefault();
     if (!(await preguntar('Sin la clave no se puede entrar. La única salida es BORRAR TODO lo de este teléfono (después puede cargar una copia de seguridad). ¿Borrar todo?', 'Borrar todo'))) return;
     try { localStorage.removeItem(CLAVE_PIN); localStorage.removeItem(CLAVE); } catch (err) { /* nada */ }
+    await Nube.salir(); // para volver a ver los datos de la nube hay que entrar con la cuenta
     datos = estadoNuevo();
     bloqueada = false;
     render();
@@ -936,7 +1065,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { ocultaDesde = Date.now(); return; }
   if (tieneClave() && !bloqueada && ocultaDesde && Date.now() - ocultaDesde > MINUTOS_BLOQUEO * 60000) return bloquear();
   if (hoy() !== diaPintado) { diaPintado = hoy(); render(); }
+  traerDeLaNube();
 });
+iniciarNube();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

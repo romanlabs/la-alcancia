@@ -14,7 +14,7 @@
 <body>
   <header class="barra">
     <h1>La Alcancía</h1>
-    <span id="fecha-hoy" style="display:inline-block"></span>
+    <span class="derecha-barra"><span id="fecha-hoy"></span><span id="nube-estado" class="nube"></span></span>
   </header>
 
   <main id="contenido"></main>
@@ -33,7 +33,9 @@
   </form></dialog>
   <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
   <script src="logica.js"></script>
+  <script src="nube.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

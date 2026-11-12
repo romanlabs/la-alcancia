@@ -1,6 +1,6 @@
 // Guarda la app para que abra sin internet. Cambie VERSION cada vez que publique cambios.
-const VERSION = 'alcancia-v6';
-const ARCHIVOS = ['./', 'index.html', 'estilos.css', 'logica.js', 'app.js', 'manifest.webmanifest', 'icono.svg'];
+const VERSION = 'alcancia-v7';
+const ARCHIVOS = ['./', 'index.html', 'estilos.css', 'logica.js', 'nube.js', 'app.js', 'manifest.webmanifest', 'icono.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
@@ -17,6 +17,9 @@ self.addEventListener('activate', (e) => {
 // Primero la red (para recibir cambios); si no hay internet, lo guardado.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  // Solo se guardan los archivos de la app y la librería del CDN; la base de datos siempre va directo.
+  if (url.origin !== self.location.origin && url.hostname !== 'cdn.jsdelivr.net') return;
   e.respondWith(
     fetch(e.request)
       .then((r) => {
