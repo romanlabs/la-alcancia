@@ -3,7 +3,6 @@ const L = window.Logica;
 const CLAVE = 'la-alcancia-v1';
 const CLAVE_PIN = 'la-alcancia-clave';
 const MINUTOS_BLOQUEO = 5;
-const CORTOS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 const PLANTILLA = [
@@ -63,12 +62,19 @@ function avisar(texto) {
 
 /* ---------- datos ---------- */
 function estadoNuevo() {
-  return { version: 1, configurado: false, descanso: [0], obligaciones: [], registros: [], pagos: [] };
+  return { version: 2, configurado: false, diasSemana: 6, margen: 2, obligaciones: [], registros: [], pagos: [] };
+}
+/** Datos viejos (con días fijos de descanso) pasan a "días por semana". */
+function migrar(d) {
+  const n = { ...estadoNuevo(), ...d };
+  if (d.diasSemana == null && Array.isArray(d.descanso)) n.diasSemana = Math.max(1, 7 - d.descanso.length);
+  delete n.descanso;
+  return n;
 }
 function cargar() {
   try {
     const t = localStorage.getItem(CLAVE);
-    if (t) return { ...estadoNuevo(), ...JSON.parse(t) };
+    if (t) return migrar(JSON.parse(t));
   } catch (e) { /* sin almacenamiento: empieza vacío */ }
   return estadoNuevo();
 }
@@ -112,7 +118,7 @@ function cuentasDeHoy() {
   return activas().map((o) => {
     const ya = aportes[o.id] || 0;
     const alEmpezarElDia = { ...o, apartado: Math.max(0, o.apartado - ya) };
-    const cuota = L.cuotaDelDia(alEmpezarElDia, f, datos.descanso);
+    const cuota = L.cuotaDelDia(alEmpezarElDia, f, datos);
     return {
       o, ya, cuota,
       pendiente: Math.max(0, cuota - ya),
@@ -161,9 +167,27 @@ function filaPlantilla(p, i) {
     </div>`;
 }
 
-function selectorDescanso(nombre = 'descanso') {
-  return `<div class="dias">${DIAS.map((d, n) =>
-    `<label title="${d}"><input type="checkbox" name="${nombre}" value="${n}" ${datos.descanso.includes(n) ? 'checked' : ''}><span>${CORTOS[n]}</span></label>`).join('')}</div>`;
+function botonesNumero(nombre, desde, hasta, actual) {
+  const opciones = [];
+  for (let n = desde; n <= hasta; n++) opciones.push(n);
+  return `<div class="dias" style="grid-template-columns:repeat(${opciones.length},minmax(0,1fr))">${opciones.map((n) =>
+    `<label><input type="radio" name="${nombre}" value="${n}" ${n === actual ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div>`;
+}
+
+/** Preguntas de cómo se trabaja (en la configuración inicial y en Ajustes). */
+function preguntasTrabajo() {
+  return `
+    <label>¿Cuántos días trabaja a la semana, más o menos?</label>
+    ${botonesNumero('diasSemana', 1, 7, datos.diasSemana)}
+    <p class="suave">Si a veces falla por un imprevisto, ponga un número más bajo. Mejor que sobre a que falte.</p>
+    <label>¿Cuántos días antes del pago quiere tener la plata lista?</label>
+    ${botonesNumero('margen', 0, 4, datos.margen)}
+    <p class="suave">Es un colchón: si justo antes del pago no se puede trabajar, la plata ya está.</p>`;
+}
+function leerTrabajo(fd) {
+  const cfg = L.ajustes({ diasSemana: fd.get('diasSemana'), margen: fd.get('margen') });
+  datos.diasSemana = cfg.diasSemana;
+  datos.margen = cfg.margen;
 }
 
 function pantallaInicio(c) {
@@ -174,9 +198,8 @@ function pantallaInicio(c) {
       <p class="suave">Llene solo lo que aplique. Lo que deje sin valor no se agrega. Todo se puede cambiar después.</p>
     </div>
     <form id="form-inicio">
-      <h2>¿Qué días descansa?</h2>
-      <p class="suave">Esos días no se cuentan para apartar.</p>
-      ${selectorDescanso()}
+      <h2>¿Cómo trabaja?</h2>
+      ${preguntasTrabajo()}
       <h2>Lo que hay que pagar</h2>
       <div class="rejilla">${PLANTILLA.map(filaPlantilla).join('')}</div>
       <button type="submit" class="principal">Empezar</button>
@@ -185,7 +208,7 @@ function pantallaInicio(c) {
   $('#form-inicio').addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    datos.descanso = fd.getAll('descanso').map(Number);
+    leerTrabajo(fd);
     const nuevas = [];
     const errores = [];
     PLANTILLA.forEach((p, i) => {
@@ -215,7 +238,6 @@ function pantallaHoy(c) {
   const registrosHoy = datos.registros.filter((r) => r.fecha === f);
   const apartadoHoy = registrosHoy.reduce((s, r) => s + r.apartado, 0);
   const proximos = [...activas()].sort((a, b) => (a.proximo < b.proximo ? -1 : 1)).slice(0, 4);
-  const descansa = datos.descanso.includes(L.aFecha(f).getDay());
 
   c.innerHTML = `
     <div class="columnas"><div>
@@ -223,7 +245,6 @@ function pantallaHoy(c) {
       <p class="suave">${apartadoHoy ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar'}</p>
       <p class="cifra">${pesos(pendiente)}</p>
       <p class="suave">${pendiente ? 'para que no falte cuando lleguen los pagos.' : apartadoHoy ? '¡Listo por hoy! 💪' : 'No hay nada pendiente hoy.'}</p>
-      ${descansa ? '<p class="suave">Hoy es su día de descanso. Si trabajó, regístrelo igual.</p>' : ''}
     </div>
 
     <form id="form-dia" class="tarjeta">
@@ -233,6 +254,7 @@ function pantallaHoy(c) {
       <label>¿Cuánto gastó en gasolina o el carro hoy?</label>
       ${campoPesos('carro')}
       <div id="calculo"></div>
+      <p class="suave" style="margin-top:12px">¿Hoy no se trabajó? No registre nada: lo de hoy se reparte solo en los próximos días.</p>
     </form>
 
     ${registrosHoy.length ? `
@@ -516,8 +538,8 @@ function pantallaHistorial(c) {
 /* ---------- AJUSTES ---------- */
 function pantallaAjustes(c) {
   c.innerHTML = `
-    <h2>Días de descanso</h2>
-    <div class="tarjeta">${selectorDescanso()}</div>
+    <h2>Cómo se trabaja</h2>
+    <form class="tarjeta" id="form-trabajo" style="padding-top:2px">${preguntasTrabajo()}</form>
     <h2>Copia de seguridad</h2>
     <div class="tarjeta">
       <p class="suave">Todo se guarda solo en este teléfono, no en internet. Descargue una copia de vez en cuando por si se pierde o cambia el celular.</p>
@@ -562,11 +584,11 @@ function pantallaAjustes(c) {
     };
   }
 
-  $$('[name=descanso]', c).forEach((ch) => (ch.onchange = () => {
-    datos.descanso = $$('[name=descanso]:checked', c).map((x) => Number(x.value));
+  $('#form-trabajo').onchange = (e) => {
+    leerTrabajo(new FormData(e.currentTarget));
     guardar();
     avisar('Guardado');
-  }));
+  };
 
   $('#btn-exportar').onclick = () => {
     const blob = new Blob([JSON.stringify(datos, null, 2)], { type: 'application/json' });
@@ -584,7 +606,7 @@ function pantallaAjustes(c) {
       const d = JSON.parse(await archivo.text());
       if (!Array.isArray(d.obligaciones)) throw new Error('formato');
       if (!confirm('Esto reemplaza lo que hay en este teléfono por la copia. ¿Seguir?')) return;
-      datos = { ...estadoNuevo(), ...d };
+      datos = migrar(d);
       guardar();
       avisar('Copia cargada');
       ir('hoy');
@@ -664,7 +686,7 @@ function pantallaBloqueo(c) {
 }
 
 /* Mientras se escribe (teclado abierto) se esconde la barra de abajo */
-const esCampo = (el) => el && el.matches && el.matches('input:not([type=checkbox]):not([type=file]), select');
+const esCampo = (el) => el && el.matches && el.matches('input:not([type=checkbox]):not([type=radio]):not([type=file]), select');
 document.addEventListener('focusin', (e) => { if (esCampo(e.target)) document.body.classList.add('escribiendo'); });
 document.addEventListener('focusout', () => {
   setTimeout(() => { if (!esCampo(document.activeElement)) document.body.classList.remove('escribiendo'); }, 50);

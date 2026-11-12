@@ -55,13 +55,22 @@
     return sumarDias(desde, (diaSemana - d.getDay() + 7) % 7);
   }
 
-  /** Cuenta los días de trabajo en [desde, hasta), saltando los días de descanso. */
-  function diasDeTrabajo(desde, hasta, descanso) {
-    let n = 0;
-    for (let f = desde; f < hasta; f = sumarDias(f, 1)) {
-      if (!descanso.includes(aFecha(f).getDay())) n++;
-    }
-    return n;
+  /**
+   * Cuántos días se van a trabajar, más o menos, entre hoy (incluido) y `hasta` (sin incluir),
+   * si se trabajan `diasSemana` días por semana. Redondea hacia abajo: mejor quedar con plata de más.
+   * Hoy siempre cuenta (si está registrando, trabajó).
+   */
+  function diasProbables(hoy, hasta, diasSemana) {
+    const calendario = diasEntre(hoy, hasta);
+    if (calendario <= 1) return 1;
+    return Math.max(1, Math.floor((calendario * diasSemana) / 7));
+  }
+
+  /** Normaliza la configuración: días que trabaja por semana (1-7) y días de margen antes del pago (0-7). */
+  function ajustes(cfg = {}) {
+    const diasSemana = Math.min(7, Math.max(1, Math.round(Number(cfg.diasSemana) || 7)));
+    const margen = Math.min(7, Math.max(0, Math.round(Number(cfg.margen) || 0)));
+    return { diasSemana, margen };
   }
 
   function redondearMil(x) {
@@ -77,15 +86,17 @@
 
   /**
    * Cuánto hay que apartar HOY para este compromiso.
-   * Lo que falta se divide entre los días de trabajo que quedan antes del pago,
-   * contando hoy (hoy siempre cuenta: si está registrando, está trabajando).
-   * Si un día no se aparta, lo que falta se reparte solo en los días siguientes.
+   * Meta: tener la plata `margen` días ANTES del pago (colchón por imprevistos).
+   * Lo que falta se divide entre los días que probablemente se trabajen hasta esa meta.
+   * Si un día no se trabaja o no se aparta, lo que falta se reparte solo en los días siguientes.
    */
-  function cuotaDelDia(o, hoy, descanso) {
+  function cuotaDelDia(o, hoy, cfg) {
+    const { diasSemana, margen } = ajustes(cfg);
     const falta = Math.max(0, (o.monto || 0) - (o.apartado || 0));
     if (falta === 0) return 0;
-    if (o.proximo <= hoy) return falta; // vence hoy o ya se venció
-    const dias = 1 + diasDeTrabajo(sumarDias(hoy, 1), o.proximo, descanso);
+    const meta = sumarDias(o.proximo, -margen);
+    if (meta <= hoy) return falta; // ya llegó la meta (o el pago): toca todo lo que falta
+    const dias = diasProbables(hoy, meta, diasSemana);
     return Math.min(falta, redondearMil(falta / dias));
   }
 
@@ -154,7 +165,7 @@
 
   const Logica = {
     aFecha, iso, sumarDias, diasEntre, fechaMensual, proximaMensual, siguienteMensual,
-    proximaSemanal, diasDeTrabajo, redondearMil, primeraFecha, cuotaDelDia, estado, repartir, pagar,
+    proximaSemanal, diasProbables, ajustes, redondearMil, primeraFecha, cuotaDelDia, estado, repartir, pagar,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Logica;

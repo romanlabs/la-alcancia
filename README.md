@@ -9,8 +9,10 @@ Está pensada para ingresos diarios e irregulares (InDrive / Uber) y para pagos 
 ## Cómo funciona
 
 - Cada pago tiene un valor, una fecha (cada mes, cada semana o una sola vez) y lo que ya se ha apartado.
-- **Cuota del día** = lo que falta ÷ los días de trabajo que quedan antes de la fecha (sin contar los días de descanso).
-  Si un día no se aparta, la cuota de los días siguientes sube sola.
+- **Cuota del día** = lo que falta ÷ los días que *probablemente* se trabajen antes de la meta.
+  - Se configura cuántos días se trabaja a la semana, más o menos (los días varían; un imprevisto no rompe nada).
+  - **Margen:** la meta es tener la plata lista X días *antes* del pago, como colchón.
+  - Si un día no se trabaja, no se registra nada: lo que faltó se reparte solo en los días siguientes.
 - Al registrar el día (lo que entró − gasolina/carro), la app propone cuánto apartar y lo reparte:
   primero lo que vence antes y, si hay empate, lo más grave.
 - Si no alcanza, lo dice claramente ("faltaron $X") y lo reparte en los días siguientes.

@@ -1,5 +1,5 @@
 // Guarda la app para que abra sin internet. Cambie VERSION cada vez que publique cambios.
-const VERSION = 'alcancia-v4';
+const VERSION = 'alcancia-v5';
 const ARCHIVOS = ['./', 'index.html', 'estilos.css', 'logica.js', 'app.js', 'manifest.webmanifest', 'icono.svg'];
 
 self.addEventListener('install', (e) => {

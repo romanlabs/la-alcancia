@@ -3,8 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const L = require('../logica.js');
 
-const SIN_DESCANSO = [];
-const DOMINGO = [0];
+const TODOS = { diasSemana: 7, margen: 0 };
 
 test('fechas mensuales: recorta al último día y pasa de año', () => {
   assert.equal(L.proximaMensual('2026-11-12', 15), '2026-11-15');
@@ -22,40 +21,55 @@ test('fechas semanales', () => {
   assert.equal(L.proximaSemanal('2026-11-12', 1), '2026-11-16');
 });
 
-test('días de trabajo saltan el domingo', () => {
-  // jue 12 → dom 22 (sin contar el 22): 12..21 = 10 días, 1 domingo (16 no; 15 es domingo)
-  assert.equal(L.diasDeTrabajo('2026-11-12', '2026-11-22', DOMINGO), 9);
-  assert.equal(L.diasDeTrabajo('2026-11-12', '2026-11-22', SIN_DESCANSO), 10);
-  assert.equal(L.diasDeTrabajo('2026-11-12', '2026-11-12', SIN_DESCANSO), 0);
+test('días probables: según cuántos días trabaja a la semana', () => {
+  assert.equal(L.diasProbables('2026-11-12', '2026-11-22', 7), 10);
+  assert.equal(L.diasProbables('2026-11-12', '2026-11-22', 5), 7); // 10 × 5/7 = 7,1 → 7
+  assert.equal(L.diasProbables('2026-11-12', '2026-11-13', 3), 1); // solo hoy
+  assert.equal(L.diasProbables('2026-11-12', '2026-11-14', 1), 1); // nunca menos de 1
+});
+
+test('ajustes: valores raros se corrigen', () => {
+  assert.deepEqual(L.ajustes({}), { diasSemana: 7, margen: 0 });
+  assert.deepEqual(L.ajustes({ diasSemana: 12, margen: -3 }), { diasSemana: 7, margen: 0 });
+  assert.deepEqual(L.ajustes({ diasSemana: '5', margen: '2' }), { diasSemana: 5, margen: 2 });
 });
 
 const base = (x) => ({ id: 'a', tipo: 'mensual', dia: 22, monto: 100000, apartado: 0, inicio: '2026-11-12', proximo: '2026-11-22', ...x });
 
 test('cuota: reparte lo que falta entre los días que quedan (contando hoy)', () => {
-  assert.equal(L.cuotaDelDia(base(), '2026-11-12', SIN_DESCANSO), 10000); // 10 días
-  assert.equal(L.cuotaDelDia(base(), '2026-11-12', DOMINGO), 12000); // 9 días → 11.111 → 12.000
+  assert.equal(L.cuotaDelDia(base(), '2026-11-12', TODOS), 10000); // 10 días
+  assert.equal(L.cuotaDelDia(base(), '2026-11-12', { diasSemana: 5 }), 15000); // 7 días probables → 14.286 → 15.000
+});
+
+test('cuota: con margen, la meta es tener la plata antes del pago', () => {
+  // paga el 22, margen 2 → meta el 20 → 8 días (12..19)
+  assert.equal(L.cuotaDelDia(base(), '2026-11-12', { diasSemana: 7, margen: 2 }), 13000); // 12.500 → 13.000
+  // ya pasó la meta pero no el pago → toca todo
+  assert.equal(L.cuotaDelDia(base(), '2026-11-21', { diasSemana: 7, margen: 2 }), 100000);
 });
 
 test('cuota: vence hoy o ya vencida = todo lo que falta', () => {
-  assert.equal(L.cuotaDelDia(base({ proximo: '2026-11-12' }), '2026-11-12', SIN_DESCANSO), 100000);
-  assert.equal(L.cuotaDelDia(base({ proximo: '2026-11-10', apartado: 30000 }), '2026-11-12', SIN_DESCANSO), 70000);
+  assert.equal(L.cuotaDelDia(base({ proximo: '2026-11-12' }), '2026-11-12', TODOS), 100000);
+  assert.equal(L.cuotaDelDia(base({ proximo: '2026-11-10', apartado: 30000 }), '2026-11-12', TODOS), 70000);
 });
 
 test('cuota: cubierta = 0, y nunca pasa de lo que falta', () => {
-  assert.equal(L.cuotaDelDia(base({ apartado: 100000 }), '2026-11-12', SIN_DESCANSO), 0);
-  assert.equal(L.cuotaDelDia(base({ apartado: 99500 }), '2026-11-12', SIN_DESCANSO), 500);
+  assert.equal(L.cuotaDelDia(base({ apartado: 100000 }), '2026-11-12', TODOS), 0);
+  assert.equal(L.cuotaDelDia(base({ apartado: 99500 }), '2026-11-12', TODOS), 500);
 });
 
-test('cuota: si un día no aparta, sube la de los días siguientes', () => {
-  const dia1 = L.cuotaDelDia(base(), '2026-11-12', SIN_DESCANSO);
-  const dia2SinApartar = L.cuotaDelDia(base(), '2026-11-13', SIN_DESCANSO);
-  assert.ok(dia2SinApartar > dia1);
-  assert.equal(dia2SinApartar, 12000); // 100.000 / 9
+test('cuota: si un día no se trabaja, sube la de los días siguientes', () => {
+  const cfg = { diasSemana: 6, margen: 1 };
+  const dia1 = L.cuotaDelDia(base(), '2026-11-12', cfg);
+  const dia2SinTrabajar = L.cuotaDelDia(base(), '2026-11-13', cfg);
+  const dia3SinTrabajar = L.cuotaDelDia(base(), '2026-11-14', cfg);
+  assert.ok(dia1 < dia2SinTrabajar && dia2SinTrabajar <= dia3SinTrabajar && dia1 < dia3SinTrabajar);
 });
 
-test('cuota: si solo quedan días de descanso, hoy toca todo', () => {
-  // hoy sábado 14, paga lunes 16, domingo descansa → solo cuenta hoy
-  assert.equal(L.cuotaDelDia(base({ proximo: '2026-11-16' }), '2026-11-14', DOMINGO), 100000 / 1);
+test('cuota: trabajando menos días a la semana, cada día toca más', () => {
+  const seis = L.cuotaDelDia(base(), '2026-11-12', { diasSemana: 6 });
+  const cuatro = L.cuotaDelDia(base(), '2026-11-12', { diasSemana: 4 });
+  assert.ok(cuatro > seis);
 });
 
 test('repartir: si no alcanza, primero lo que vence antes y se ve el faltante', () => {
