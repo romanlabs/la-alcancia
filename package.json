@@ -1,0 +1,10 @@
+{
+  "name": "la-alcancia",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cuánto apartar cada día para que no falte el día de pagar.",
+  "scripts": {
+    "test": "node --test pruebas/logica.test.js",
+    "start": "npx --yes serve@14.2.4 -l 5173 ."
+  }
+}

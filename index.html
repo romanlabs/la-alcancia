@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es-CO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>La Alcancía</title>
+  <meta name="description" content="Cuánto apartar cada día para que no falte el día de pagar.">
+  <meta name="theme-color" content="#1f6f4a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icono.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icono.svg">
+  <link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+  <header class="barra">
+    <h1>La Alcancía</h1>
+    <span id="fecha-hoy" style="display:inline-block"></span>
+  </header>
+
+  <main id="contenido"></main>
+
+  <nav class="pestanas" id="pestanas" hidden>
+    <button data-vista="hoy">Hoy</button>
+    <button data-vista="sobres">Pagos</button>
+    <button data-vista="historial">Historial</button>
+    <button data-vista="ajustes">Ajustes</button>
+  </nav>
+
+  <dialog id="modal"><form method="dialog" id="modal-form"></form></dialog>
+  <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
+
+  <script src="logica.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
