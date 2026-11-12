@@ -547,7 +547,7 @@ function pantallaInicio(c) {
 /* ---------- HOY ---------- */
 /** Cuánto hay que apartar al día en un mes normal (sin atrasos), según los pagos y los días de trabajo. */
 function cuotaMesNormal() {
-  const porMes = activas().reduce((s, o) => s + (o.tipo === 'semanal' ? (o.monto * 52) / 12 : o.tipo === 'mensual' ? o.monto : 0), 0);
+  const porMes = activas().reduce((s, o) => s + (o.tipo === 'semanal' ? (o.monto * 52) / 12 : o.tipo === 'mensual' ? o.monto : o.tipo === 'anual' ? o.monto / 12 : 0), 0);
   const vecesPorSemana = L.ajustes(datos).diasSemana;
   return L.redondearMil(porMes / ((vecesPorSemana * 365) / 12 / 7));
 }
@@ -754,6 +754,49 @@ function tarjetaCorta(o, f, faltantes) {
     </div>`;
 }
 
+
+/* ---------- PAGO DE LA TARJETA (suma de todos los perfiles) ---------- */
+/** Junta las cuentas marcadas "se paga con la tarjeta" de todos los perfiles guardados en este celular. */
+function pagosTarjeta() {
+  const grupos = {};
+  let faltanPerfiles = [];
+  for (const p of perfiles.lista) {
+    const d = p.id === datos.perfil ? datos : (() => { try { return localStorage.getItem(claveDatos(p.id)) ? cargar(p.id) : null; } catch (e) { return null; } })();
+    if (!d) { faltanPerfiles.push(p.nombre); continue; }
+    for (const o of d.obligaciones) {
+      if (o.activa === false || !o.conTarjeta || !o.proximo) continue;
+      const g = (grupos[o.proximo] = grupos[o.proximo] || { total: 0, apartado: 0, porPerfil: {} });
+      g.total += o.monto || 0;
+      g.apartado += Math.min(o.apartado || 0, o.monto || 0);
+      g.porPerfil[p.nombre] = (g.porPerfil[p.nombre] || 0) + (o.monto || 0);
+    }
+  }
+  return { grupos: Object.entries(grupos).sort((a, b) => (a[0] < b[0] ? -1 : 1)), faltanPerfiles };
+}
+
+function tarjetaPagoTarjeta() {
+  const { grupos, faltanPerfiles } = pagosTarjeta();
+  if (!grupos.length) return '';
+  const [fecha, g] = grupos[0];
+  return `
+    <div class="tarjeta">
+      <h3 style="margin:0 0 4px">💳 Pago de la tarjeta · ${fechaCorta(fecha)}</h3>
+      <p class="cifra-m">${pesos(g.total)}</p>
+      <ul class="lista">${Object.entries(g.porPerfil).map(([n, m]) => `<li><span>${esc(n)}</span><span class="monto">${pesos(m)}</span></li>`).join('')}
+        <li><span>Ya apartado</span><span class="monto">${pesos(g.apartado)}</span></li></ul>
+      <p class="suave">Compárelo con el <b>pago total</b> que muestra ${esc(banco())} después del corte. Si es distinto, ajuste los valores en "Editar".
+        ${faltanPerfiles.length ? ` Falta sumar: ${faltanPerfiles.map(esc).join(', ')} (abra ese perfil una vez en este celular).` : ''}</p>
+      <details class="detalle-dia"><summary>Consejos para pagar menos intereses</summary>
+        <ul class="lista">
+          <li><span>Pague <b>más que el mínimo</b>, idealmente el total, antes de la fecha límite.</span></li>
+          <li><span>Las compras a <b>1 cuota</b> pagadas completas a tiempo no cobran intereses. En la app de ${esc(banco())} se pueden cambiar las cuotas de una compra.</span></li>
+          <li><span>Al enviar plata por Bre-B, elija como fuente la <b>cuenta</b>, no la tarjeta de crédito: con la tarjeta cuenta como <b>avance</b> (intereses desde el primer día y comisión).</span></li>
+          <li><span>Si sobra plata, que el abono vaya primero a los <b>avances</b>. Pregunte en el chat de ${esc(banco())} cómo aplicarlo a capital.</span></li>
+        </ul>
+      </details>
+    </div>`;
+}
+
 function pantallaPagos(c) {
   const f = hoy();
   const p = proyeccion();
@@ -768,18 +811,20 @@ function pantallaPagos(c) {
       ${datos.extra ? `<p class="suave">De eso, ahorro extra (sin pago asignado): <b>${pesos(datos.extra)}</b>
         <button class="chico" id="btn-extra" style="margin-left:6px">Usar / ajustar</button></p>` : ''}
     </div>
+    ${tarjetaPagoTarjeta()}
     ${tarjetaCuadre()}
     ${avisoPlan(p)}
     <button class="principal" id="btn-nuevo">+ Agregar un pago</button>
     <div class="rejilla">${lista.map((o) => {
       const est = estadoDe(o, f, p.faltantes);
       const pct = Math.min(100, Math.round((o.apartado / (o.monto || 1)) * 100));
-      const cada = o.tipo === 'mensual' ? `cada mes el ${o.dia}` : o.tipo === 'semanal' ? `cada ${DIAS[o.dia]}` : 'una sola vez';
+      const cada = o.tipo === 'mensual' ? `cada mes el ${o.dia}` : o.tipo === 'semanal' ? `cada ${DIAS[o.dia]}`
+        : o.tipo === 'anual' ? `cada año (${L.aFecha(o.proximo).toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })})` : 'una sola vez';
       return `
       <div class="tarjeta">
         <div class="cabeza"><h3>${esc(o.nombre)}</h3><span class="chip ${est}">${ETIQUETA[est]}</span></div>
         <p class="suave">${o.variable ? '≈ ' : ''}${pesos(o.monto)} · ${cada}</p>
-        ${o.variable ? '<p class="suave">💡 El valor cambia cada mes: cuando llegue el recibo, actualícelo en "Editar".</p>' : ''}
+        ${o.variable ? '<p class="suave">💡 El valor puede cambiar: cuando llegue el recibo o el cobro, actualícelo en "Editar".</p>' : ''}
         <p>Próximo pago: <b>${fechaCorta(o.proximo)}</b> (${cuandoVence(o.proximo)})</p>
         <div class="barra-progreso"><div style="width:${pct}%"></div></div>
         <p><b>${pesos(o.apartado)}</b> apartados de ${pesos(o.monto)}</p>
@@ -882,12 +927,13 @@ function editar(id) {
     <select name="tipo">
       <option value="mensual" ${o.tipo === 'mensual' ? 'selected' : ''}>Cada mes</option>
       <option value="semanal" ${o.tipo === 'semanal' ? 'selected' : ''}>Cada semana</option>
+      <option value="anual" ${o.tipo === 'anual' ? 'selected' : ''}>Cada año</option>
       <option value="unica" ${o.tipo === 'unica' ? 'selected' : ''}>Una sola vez</option>
     </select>
     <div id="cuando"></div>
-    ${id && o.tipo !== 'unica' ? `<label>Próxima fecha de pago</label><input type="date" name="proximo" value="${o.proximo || ''}">
+    ${id && o.tipo !== 'unica' && o.tipo !== 'anual' ? `<label>Próxima fecha de pago</label><input type="date" name="proximo" value="${o.proximo || ''}">
       <p class="suave">Cámbiela si este mes el recibo llega otro día.</p>` : ''}
-    ${o.tipo !== 'semanal' && o.tipo !== 'unica' ? `<label class="check"><input type="checkbox" name="yaPagado"> Ya está pagado el de este mes (el próximo es el del otro mes)</label>` : ''}
+    ${o.tipo !== 'semanal' && o.tipo !== 'unica' && o.tipo !== 'anual' ? `<label class="check"><input type="checkbox" name="yaPagado"> Ya está pagado el de este mes (el próximo es el del otro mes)</label>` : ''}
     <label>¿Cuánto es?</label>${campoPesos('monto', o.monto)}
     <div class="fila">
       <div><label>Deuda total <span class="suave">(opcional)</span></label>${campoPesos('saldo', o.saldoTotal)}</div>
@@ -902,6 +948,7 @@ function editar(id) {
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
     <label class="check"><input type="checkbox" name="variable" ${o.variable ? 'checked' : ''}> El valor cambia cada mes (recibo por consumo, cobro en dólares)</label>
+    <label class="check"><input type="checkbox" name="conTarjeta" ${o.conTarjeta ? 'checked' : ''}> Se paga con la tarjeta de crédito</label>
     ${campoCajita(o.bolsillo, cajitaCuentas())}
     <label>Nota <span class="suave">(opcional)</span></label>
     <input name="nota" value="${esc(o.nota)}" placeholder="Ej: número de contrato, a quién se le paga…" maxlength="160">
@@ -926,15 +973,16 @@ function editar(id) {
       prioridad: Number(fd.get('prioridad')),
       saldoTotal: num(fd.get('saldo')) || null,
       variable: !!fd.get('variable'),
+      conTarjeta: !!fd.get('conTarjeta'),
       nota: String(fd.get('nota') || '').trim(),
       bolsillo: String(fd.get('bolsillo') || '').trim(),
     };
-    if (tipo === 'unica') campos.fecha = fd.get('fecha');
+    if (tipo === 'unica' || tipo === 'anual') campos.fecha = fd.get('fecha');
     else campos.dia = Number(fd.get('dia'));
     if (!campos.monto && campos.saldoTotal && num(fd.get('cuotas'))) campos.monto = L.redondearMil(campos.saldoTotal / num(fd.get('cuotas')));
     if (!campos.monto) { avisar('Falta cuánto es (o la deuda total y en cuántas cuotas)'); return false; }
     if (tipo === 'mensual' && !(campos.dia >= 1 && campos.dia <= 31)) { avisar('El día del mes va de 1 a 31'); return false; }
-    if (tipo === 'unica' && !campos.fecha) { avisar('Falta la fecha'); return false; }
+    if ((tipo === 'unica' || tipo === 'anual') && !campos.fecha) { avisar('Falta la fecha'); return false; }
 
     if (!id) {
       if (tipo === 'mensual' && fd.get('yaPagado')) campos.proximo = L.proximaSiYaPagoEsteMes(hoy(), campos.dia);
@@ -949,6 +997,7 @@ function editar(id) {
       if (cambioManual) { o.proximo = proximoManual; o.inicio = hoy(); }
       else if (tipo === 'mensual' && fd.get('yaPagado')) { o.proximo = L.proximaSiYaPagoEsteMes(hoy(), campos.dia); o.inicio = hoy(); }
       else if (cambioFecha || estabaTerminada) { o.proximo = L.primeraFecha(o, hoy()); o.inicio = hoy(); }
+      if (tipo === 'anual' && campos.fecha) { o.proximo = L.proximaAnual(hoy(), campos.fecha); }
     }
     guardar(); render();
     const guardada = id ? o : datos.obligaciones[datos.obligaciones.length - 1];
@@ -960,7 +1009,10 @@ function editar(id) {
         ? `<label>¿Qué día del mes?</label><input name="dia" inputmode="numeric" maxlength="2" value="${o.tipo === 'mensual' ? o.dia : ''}" placeholder="Ej: 15">`
         : t === 'semanal'
           ? `<label>¿Qué día de la semana?</label><select name="dia">${DIAS.map((d, n) => `<option value="${n}" ${o.tipo === 'semanal' && o.dia === n ? 'selected' : ''}>${d}</option>`).join('')}</select>`
-          : `<label>¿Qué fecha?</label><input type="date" name="fecha" value="${o.fecha || ''}">`;
+          : t === 'anual'
+            ? `<label>¿Qué fecha se paga cada año?</label><input type="date" name="fecha" value="${o.tipo === 'anual' ? (o.proximo || o.fecha || '') : ''}">
+               <p class="suave">Ponga la próxima vez que toca pagarlo. Después de pagar, pasa sola al año siguiente.</p>`
+            : `<label>¿Qué fecha?</label><input type="date" name="fecha" value="${o.fecha || ''}">`;
     };
     form.tipo.onchange = pintarCuando;
     pintarCuando();

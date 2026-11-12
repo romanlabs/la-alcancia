@@ -38,16 +38,17 @@ const Nube = (() => {
   /* ---------- conversión app ⇄ tablas ---------- */
   const aFilaObligacion = (o, uid) => ({
     id: o.id, user_id: uid, nombre: o.nombre, tipo: o.tipo,
-    dia: o.tipo === 'unica' ? null : (o.dia ?? null), fecha: o.fecha || null,
+    dia: o.tipo === 'unica' || o.tipo === 'anual' ? null : (o.dia ?? null), fecha: o.fecha || null,
     monto: o.monto || 0, apartado: o.apartado || 0, prioridad: o.prioridad || 2,
     saldo_total: o.saldoTotal ?? null, inicio: o.inicio || null, proximo: o.proximo || null,
-    activa: o.activa !== false, nota: o.nota || '', bolsillo: o.bolsillo || '', variable: !!o.variable,
+    activa: o.activa !== false, nota: o.nota || '', bolsillo: o.bolsillo || '', variable: !!o.variable, con_tarjeta: !!o.conTarjeta,
   });
   const deFilaObligacion = (f) => ({
     id: f.id, nombre: f.nombre, tipo: f.tipo, dia: f.dia ?? undefined, fecha: f.fecha || undefined,
     monto: num(f.monto), apartado: num(f.apartado), prioridad: f.prioridad,
     saldoTotal: f.saldo_total == null ? null : num(f.saldo_total),
     inicio: f.inicio, proximo: f.proximo, activa: f.activa, nota: f.nota || '', bolsillo: f.bolsillo || '', variable: !!f.variable,
+    conTarjeta: !!f.con_tarjeta,
   });
   const aFilaRegistro = (r, uid) => ({
     id: r.id, user_id: uid, fecha: r.fecha, ingresos: r.ingresos || {}, ingreso: r.ingreso || 0,

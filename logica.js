@@ -83,9 +83,23 @@
   }
 
   /** Primera fecha de pago de un compromiso nuevo. */
+  /** El mismo día y mes, `n` años después (29 de febrero → 28 si el año no es bisiesto). */
+  function sumarAnios(fechaIso, n = 1) {
+    const d = aFecha(fechaIso);
+    return fechaMensual(d.getFullYear() + n, d.getMonth(), d.getDate());
+  }
+
+  /** Para un pago anual: la primera fecha >= hoy con el mismo día y mes de `fecha`. */
+  function proximaAnual(hoy, fecha) {
+    let f = fecha;
+    while (f < hoy) f = sumarAnios(f, 1);
+    return f;
+  }
+
   function primeraFecha(o, hoy) {
     if (o.tipo === 'mensual') return proximaMensual(hoy, o.dia);
     if (o.tipo === 'semanal') return proximaSemanal(hoy, o.dia);
+    if (o.tipo === 'anual') return proximaAnual(hoy, o.fecha);
     return o.fecha; // única
   }
 
@@ -148,7 +162,9 @@
   }
 
   function siguienteFecha(o, fecha) {
-    return o.tipo === 'semanal' ? sumarDias(fecha, 7) : siguienteMensual(fecha, o.dia);
+    if (o.tipo === 'semanal') return sumarDias(fecha, 7);
+    if (o.tipo === 'anual') return sumarAnios(fecha, 1);
+    return siguienteMensual(fecha, o.dia);
   }
 
   /**
@@ -380,14 +396,14 @@
       return n;
     }
     n.inicio = o.proximo;
-    n.proximo = o.tipo === 'semanal' ? sumarDias(o.proximo, 7) : siguienteMensual(o.proximo, o.dia);
+    n.proximo = siguienteFecha(o, o.proximo);
     return n;
   }
 
   const Logica = {
     aFecha, iso, sumarDias, diasEntre, fechaMensual, proximaMensual, siguienteMensual,
     proximaSemanal, diasProbables, ajustes, redondearMil, primeraFecha, cuotaDelDia, estado, repartir, pagar,
-    siguienteFecha, instancias, plan, repartirDia, asignar, necesidadDiaria, simular, proximaSiYaPagoEsteMes,
+    siguienteFecha, sumarAnios, proximaAnual, instancias, plan, repartirDia, asignar, necesidadDiaria, simular, proximaSiYaPagoEsteMes,
     repartirMetas, repartirTodo,
   };
 

@@ -270,3 +270,20 @@ test('sueldo quincenal: plan con cuota por quincena', () => {
   const p = L.plan([ob({ id: 'arriendo', dia: 5, monto: 600000, proximo: '2026-12-05' })], '2026-11-15', cfg);
   assert.equal(p.alcanza, true); // 2 quincenas antes del 5 dic: 800.000
 });
+
+/* ---------- pagos anuales ---------- */
+test('anual: próxima fecha, siguiente año y 29 de febrero', () => {
+  assert.equal(L.proximaAnual('2026-11-12', '2026-10-18'), '2027-10-18');
+  assert.equal(L.proximaAnual('2026-11-12', '2026-12-01'), '2026-12-01');
+  assert.equal(L.sumarAnios('2028-02-29', 1), '2029-02-28');
+  const o = ob({ id: 'cf', tipo: 'anual', fecha: '2027-10-18', monto: 100000, proximo: '2027-10-18', apartado: 100000 });
+  const n = L.pagar(o, 96000);
+  assert.equal(n.proximo, '2028-10-18');
+  assert.equal(n.activa, undefined); // sigue activo, no se termina como "una sola vez"
+});
+
+test('anual: se va juntando poco a poco en los meses que faltan', () => {
+  const o = ob({ id: 'cf', tipo: 'anual', fecha: '2027-10-18', monto: 120000, proximo: '2027-10-18' });
+  const r = L.repartirDia([o], 40000, '2026-11-12', { frecuencia: 'mensual' });
+  assert.ok(r.detalle.cf.necesidad > 0 && r.detalle.cf.necesidad <= 12000, 'necesita ~1/11 por mes');
+});
