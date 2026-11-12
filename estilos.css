@@ -151,7 +151,7 @@ input[type=checkbox] { min-height: 0; width: 22px; height: 22px; accent-color: v
 
 /* Teclado abierto: se esconde la barra de abajo para que no tape los campos */
 body.escribiendo .pestanas { display: none; }
-body.escribiendo { padding-bottom: 24px; }
+/* (no se cambia el espacio de abajo al escribir: movía el contenido justo al tocar un campo) */
 
 /* Ventanas (pagar / editar): en el celular salen desde abajo, con los botones siempre visibles */
 dialog { overflow: auto; overscroll-behavior: contain; }
@@ -279,7 +279,7 @@ details.detalle-dia summary { cursor: pointer; font-weight: 600; min-height: 44p
 html, body { overscroll-behavior-x: none; max-width: 100%; }
 body { touch-action: pan-y pinch-zoom; }
 .perfiles { touch-action: pan-x; overscroll-behavior-x: contain; }
-dialog { touch-action: pan-y; overflow-x: hidden; }
+dialog { overflow-x: hidden; }
 
 /* iPhone: el campo de fecha no respeta el ancho y la casilla toma el estilo de los campos grandes */
 input[type=date] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left; }
@@ -288,3 +288,19 @@ input[type=date]::-webkit-calendar-picker-indicator { margin-left: auto; }
 input[type=checkbox] { -webkit-appearance: checkbox; appearance: auto; padding: 0; margin: 0; border: 0; border-radius: 4px; background: none; flex: 0 0 22px; }
 label.check { align-items: flex-start; line-height: 1.35; }
 label.check input { margin-top: 2px; }
+
+/* Celular: las ventanas ocupan toda la pantalla desde arriba y sin animación de movimiento.
+   Con la ventana pegada abajo y el teclado abierto, el celular tomaba el toque en el campo de arriba. */
+@media (max-width: 599px) {
+  dialog {
+    position: fixed; inset: 0; margin: 0; width: 100%; max-width: 100%;
+    height: 100%; max-height: 100%; border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+  }
+  dialog[open] { animation: aparecer .15s ease-out; }
+  dialog.confirmar {
+    inset: 0; margin: auto 16px; width: auto; height: auto; max-height: calc(100% - 32px);
+    border-radius: var(--radio); padding-top: 0;
+  }
+}
+@keyframes aparecer { from { opacity: 0; } to { opacity: 1; } }
