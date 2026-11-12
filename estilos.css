@@ -280,3 +280,11 @@ html, body { overscroll-behavior-x: none; max-width: 100%; }
 body { touch-action: pan-y pinch-zoom; }
 .perfiles { touch-action: pan-x; overscroll-behavior-x: contain; }
 dialog { touch-action: pan-y; overflow-x: hidden; }
+
+/* iPhone: el campo de fecha no respeta el ancho y la casilla toma el estilo de los campos grandes */
+input[type=date] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left; }
+input[type=date]::-webkit-date-and-time-value { text-align: left; margin: 0; }
+input[type=date]::-webkit-calendar-picker-indicator { margin-left: auto; }
+input[type=checkbox] { -webkit-appearance: checkbox; appearance: auto; padding: 0; margin: 0; border: 0; border-radius: 4px; background: none; flex: 0 0 22px; }
+label.check { align-items: flex-start; line-height: 1.35; }
+label.check input { margin-top: 2px; }

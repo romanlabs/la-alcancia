@@ -938,12 +938,16 @@ function editar(id) {
       const cambioFecha = tipo !== o.tipo || campos.dia !== o.dia || campos.fecha !== o.fecha;
       const estabaTerminada = o.activa === false;
       const proximoManual = fd.get('proximo');
+      const cambioManual = proximoManual && proximoManual !== o.proximo; // la persona escribió otra fecha
       Object.assign(o, campos, { apartado: num(fd.get('apartado')), activa: true });
-      if (tipo === 'mensual' && fd.get('yaPagado')) { o.proximo = L.proximaSiYaPagoEsteMes(hoy(), campos.dia); o.inicio = hoy(); }
-      else if (proximoManual && proximoManual !== o.proximo && !cambioFecha) { o.proximo = proximoManual; o.inicio = hoy(); }
+      // Prioridad: 1) fecha escrita a mano  2) "ya pagué el de este mes"  3) recalcular si cambió el día
+      if (cambioManual) { o.proximo = proximoManual; o.inicio = hoy(); }
+      else if (tipo === 'mensual' && fd.get('yaPagado')) { o.proximo = L.proximaSiYaPagoEsteMes(hoy(), campos.dia); o.inicio = hoy(); }
       else if (cambioFecha || estabaTerminada) { o.proximo = L.primeraFecha(o, hoy()); o.inicio = hoy(); }
     }
     guardar(); render();
+    const guardada = id ? o : datos.obligaciones[datos.obligaciones.length - 1];
+    avisar(`Guardado ✔ Próximo pago: ${fechaCorta(guardada.proximo)}`);
   }, (form) => {
     const pintarCuando = () => {
       const t = form.tipo.value;
