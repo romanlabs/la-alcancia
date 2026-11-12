@@ -10,8 +10,11 @@ Está pensada para ingresos diarios e irregulares (InDrive / Uber) y para pagos 
 
 - Cada pago tiene un valor, una fecha (cada mes, cada semana o una sola vez) y lo que ya se ha apartado.
 - **Cuota diaria fija** (por defecto $40.000, editable; en $0 la calcula la app).
-  Lo apartado se reparte entre los pagos: primero lo que vence antes; si todo está cubierto, va a *ahorro extra*.
-- **Proyección (próximos 31 días):** con esa cuota, los días que se trabajan por semana y el margen
+  Lo de cada día se reparte entre **todas** las cuentas: a cada una según lo que le falta ÷ los días de trabajo
+  que quedan para pagarla. Si no alcanza, primero la prioridad alta y, dentro de ella, en proporción a lo que
+  necesita cada una. La app muestra por qué le toca eso a cada cuenta. Si todo está cubierto, va a *ahorro extra*.
+- "Ya pagué el de este mes": para recibos que ya se pagaron por fuera; el próximo pasa al mes siguiente.
+- **Proyección (próximos 31 días):** simulando el mismo reparto día a día con esa cuota, los días que se trabajan por semana y el margen
   (tener la plata X días antes del pago), dice qué pagos no alcanzan, cuánto faltaría y qué cuota
   diaria cubriría todo a tiempo. También muestra lo que necesita un mes normal, sin atrasos.
 - Un día que no se trabaja no se registra; la proyección se ajusta sola.

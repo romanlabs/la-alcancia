@@ -247,3 +247,13 @@ button.peligro-fuerte { background: var(--rojo); color: #fff; }
 .nube { font-size: .78rem; font-weight: 600; color: var(--verde); }
 .nube.error { color: var(--ambar); }
 .nube:empty { display: none; }
+
+/* Casilla con texto ("Ya pagué el de este mes") */
+label.check { display: flex; align-items: center; gap: 10px; font-weight: 600; margin: 14px 0 0; cursor: pointer; }
+label.check input { width: 22px; height: 22px; min-height: 0; flex: 0 0 auto; accent-color: var(--verde); }
+/* Detalle opcional del día */
+details.detalle-dia { margin-top: 14px; border-top: 1px solid var(--borde); padding-top: 10px; }
+details.detalle-dia summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; gap: 6px; }
+/* Reparto explicado */
+.lista.reparto li { align-items: flex-start; }
+.lista.reparto .suave { font-size: .85rem; }

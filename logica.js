@@ -172,49 +172,139 @@
   }
 
   /**
-   * Proyección con una cuota diaria fija: apartando `cuotaDiaria` cada día que se trabaja
-   * y pagando primero lo que vence antes, ¿llega cada pago completo a su meta?
-   * `apartadoHoy`: lo que ya se apartó hoy (hoy ya no aporta más capacidad).
-   * Devuelve cada pago con lo cubierto y lo que faltaría, y la cuota diaria necesaria para cubrir todo.
+   * Cuánto le toca por día a una cuenta: lo que le falta ÷ los días de trabajo que quedan hasta su meta
+   * (la meta es `margen` días antes del pago). Si ya llegó la meta, le toca todo lo que falta.
+   */
+  function necesidadDiaria(falta, hoy, fechaPago, cfg) {
+    const { diasSemana, margen } = ajustes(cfg);
+    if (falta <= 0) return { necesidad: 0, dias: 0 };
+    const meta = sumarDias(fechaPago, -margen);
+    if (meta <= hoy) return { necesidad: falta, dias: 1 };
+    const dias = diasProbables(hoy, meta, diasSemana);
+    return { necesidad: Math.min(falta, redondearMil(falta / dias)), dias };
+  }
+
+  /**
+   * Reparte `monto` entre las cuentas.
+   * items: [{ id, necesidad, falta, prioridad, fecha }]
+   * 1) Por prioridad (1, luego 2, luego 3): si alcanza, cada cuenta recibe lo que necesita hoy;
+   *    si no alcanza, el dinero se reparte en proporción a lo que necesita cada una (en miles).
+   * 2) Si sobra, adelanta lo que falta, empezando por lo que vence antes.
+   * 3) Lo que quede (todo cubierto) es ahorro extra.
+   */
+  function asignar(items, monto) {
+    const reparto = {};
+    let resto = Math.max(0, monto);
+    const dar = (id, m) => { if (m > 0) { reparto[id] = (reparto[id] || 0) + m; resto -= m; } };
+    const porFecha = (a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+    for (const p of [1, 2, 3]) {
+      const grupo = items.filter((x) => (x.prioridad || 2) === p && x.necesidad > 0).sort(porFecha);
+      const total = grupo.reduce((s, x) => s + x.necesidad, 0);
+      if (!total || resto <= 0) continue;
+      if (resto >= total) { grupo.forEach((x) => dar(x.id, x.necesidad)); continue; }
+      const base = resto;
+      const partes = grupo.map((x) => ({ x, m: Math.floor((base * x.necesidad) / total / 1000) * 1000 }));
+      let sobra = base - partes.reduce((s, q) => s + q.m, 0);
+      for (let vuelta = 0; sobra > 0.5 && vuelta < 1000; vuelta++) {
+        let dioAlgo = false;
+        for (const q of partes) {
+          if (sobra <= 0.5) break;
+          const d = Math.min(1000, sobra, q.x.necesidad - q.m);
+          if (d > 0) { q.m += d; sobra -= d; dioAlgo = true; }
+        }
+        if (!dioAlgo) break;
+      }
+      partes.forEach((q) => dar(q.x.id, q.m));
+    }
+    for (const x of [...items].sort(porFecha)) {
+      if (resto <= 0) break;
+      dar(x.id, Math.min(resto, Math.max(0, x.falta - (reparto[x.id] || 0))));
+    }
+    return { reparto, extra: Math.max(0, resto) };
+  }
+
+  /**
+   * Reparte la plata de hoy entre las cuentas activas y explica por qué:
+   * detalle[id] = { falta, necesidad, dias, fecha } (lo que faltaba, lo que necesitaba hoy, días que quedaban).
+   */
+  function repartirDia(obligaciones, monto, hoy, cfg = {}) {
+    const items = [];
+    const detalle = {};
+    for (const o of obligaciones) {
+      if (o.activa === false) continue;
+      const falta = Math.max(0, (o.monto || 0) - (o.apartado || 0));
+      if (!falta) continue;
+      const n = hoy ? necesidadDiaria(falta, hoy, o.proximo, cfg) : { necesidad: falta, dias: 1 };
+      items.push({ id: o.id, necesidad: n.necesidad, falta, prioridad: o.prioridad || 2, fecha: o.proximo });
+      detalle[o.id] = { falta, necesidad: n.necesidad, dias: n.dias, fecha: o.proximo };
+    }
+    const r = asignar(items, monto);
+    return { reparto: r.reparto, extra: r.extra, detalle };
+  }
+
+  /** Simula los próximos días repartiendo `cuota` con la misma regla de cada día. */
+  function simular(obligaciones, hoy, cfg, cuota, apartadoHoy) {
+    const { diasSemana } = ajustes(cfg);
+    const xs = instancias(obligaciones, hoy, cfg.horizonte || 31).map((x, i) => ({ ...x, clave: String(i), restante: x.falta }));
+    const ultima = xs.reduce((m, x) => (x.fecha > m ? x.fecha : m), hoy);
+    const porDia = (cuota * diasSemana) / 7; // en promedio, contando los días que no se trabaja
+    for (let f = hoy, i = 0; f <= ultima && i < 400; f = sumarDias(f, 1), i++) {
+      const presupuesto = i === 0 ? Math.max(0, cuota - apartadoHoy) : porDia;
+      // compite solo el próximo pago pendiente de cada cuenta
+      const vistos = new Set();
+      const vivos = xs
+        .filter((x) => x.restante > 0.5 && x.fecha >= f)
+        .sort((a, b) => (a.fecha < b.fecha ? -1 : 1))
+        .filter((x) => (vistos.has(x.id) ? false : vistos.add(x.id)));
+      const items = vivos.map((x) => ({
+        id: x.clave, falta: x.restante, prioridad: x.prioridad, fecha: x.fecha,
+        necesidad: necesidadDiaria(x.restante, f, x.fecha, cfg).necesidad,
+      }));
+      const r = asignar(items, presupuesto);
+      for (const x of vivos) x.restante -= r.reparto[x.clave] || 0;
+    }
+    for (const x of xs) {
+      x.faltante = Math.max(0, redondearMil(x.restante - 0.5));
+      x.cubierto = x.falta - x.faltante;
+      delete x.restante;
+    }
+    return xs;
+  }
+
+  /**
+   * Proyección: dando `cuotaDiaria` cada día que se trabaja y repartiéndola igual que hoy,
+   * ¿llega cada pago completo? Devuelve lo que faltaría en cada uno y la cuota que cubriría todo.
+   * `apartadoHoy`: lo que ya se apartó hoy (ya está sumado en lo apartado de cada cuenta).
    */
   function plan(obligaciones, hoy, cfg = {}, apartadoHoy = 0) {
-    const { diasSemana, margen } = ajustes(cfg);
     const cuota = Math.max(0, Number(cfg.cuotaDiaria) || 0);
-    const lista = instancias(obligaciones, hoy, cfg.horizonte || 31)
-      .map((x) => ({ ...x, meta: sumarDias(x.fecha, -margen) }))
-      .sort((a, b) => (a.meta < b.meta ? -1 : a.meta > b.meta ? 1 : a.prioridad - b.prioridad));
-    let acumulado = 0;
-    let usado = 0;
+    const items = simular(obligaciones, hoy, cfg, cuota, apartadoHoy);
+    const alcanzaCon = (c) => simular(obligaciones, hoy, cfg, c, apartadoHoy).every((x) => x.faltante === 0);
     let necesaria = 0;
-    for (const x of lista) {
-      const dias = diasProbables(hoy, x.meta, diasSemana);
-      acumulado += x.falta;
-      necesaria = Math.max(necesaria, (acumulado + apartadoHoy) / dias);
-      const capacidad = Math.max(0, cuota * dias - Math.min(apartadoHoy, cuota));
-      x.cubierto = Math.min(x.falta, Math.max(0, capacidad - usado));
-      x.faltante = x.falta - x.cubierto;
-      usado += x.cubierto;
+    if (items.length) {
+      let bajo = 0;
+      let alto = Math.max(1000, redondearMil(items.reduce((s, x) => s + x.falta, 0) + apartadoHoy));
+      if (!alcanzaCon(alto)) alto *= 4;
+      while (alto - bajo > 1000) {
+        const medio = redondearMil((bajo + alto) / 2);
+        if (medio >= alto) break;
+        if (alcanzaCon(medio)) alto = medio; else bajo = medio;
+      }
+      necesaria = alto;
     }
     return {
-      items: lista,
+      items,
       cuota,
-      necesaria: redondearMil(necesaria),
-      alcanza: lista.every((x) => x.faltante === 0),
-      faltanteTotal: lista.reduce((s, x) => s + x.faltante, 0),
+      necesaria,
+      alcanza: items.every((x) => x.faltante === 0),
+      faltanteTotal: items.reduce((s, x) => s + x.faltante, 0),
     };
   }
 
-  /** Reparte la plata de hoy: primero lo que vence antes; lo que sobra queda como ahorro extra. */
-  function repartirDia(obligaciones, monto) {
-    const items = obligaciones
-      .filter((o) => o.activa !== false)
-      .map((o) => {
-        const falta = Math.max(0, (o.monto || 0) - (o.apartado || 0));
-        return { id: o.id, cuota: falta, falta, proximo: o.proximo, prioridad: o.prioridad };
-      })
-      .filter((x) => x.falta > 0);
-    const r = repartir(items, monto);
-    return { reparto: r.reparto, extra: r.sobrante };
+  /** Si el recibo de este mes ya se pagó: el próximo es el del mes siguiente. */
+  function proximaSiYaPagoEsteMes(hoy, dia) {
+    const d = aFecha(hoy);
+    return fechaMensual(d.getFullYear(), d.getMonth() + 1, dia);
   }
 
   /** Registra un pago. Devuelve el compromiso actualizado (no modifica el original). */
@@ -241,7 +331,7 @@
   const Logica = {
     aFecha, iso, sumarDias, diasEntre, fechaMensual, proximaMensual, siguienteMensual,
     proximaSemanal, diasProbables, ajustes, redondearMil, primeraFecha, cuotaDelDia, estado, repartir, pagar,
-    siguienteFecha, instancias, plan, repartirDia,
+    siguienteFecha, instancias, plan, repartirDia, asignar, necesidadDiaria, simular, proximaSiYaPagoEsteMes,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Logica;

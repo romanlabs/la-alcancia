@@ -151,41 +151,67 @@ test('instancias: la deuda total limita las cuotas', () => {
   assert.deepEqual(xs.map((x) => x.falta), [300000, 100000]);
 });
 
-test('plan: con 40.000 diarios avisa qué no alcanza y cuánto se necesitaría', () => {
+test('asignar: si alcanza, cada cuenta recibe lo que necesita; lo demás adelanta y luego es extra', () => {
+  const items = [
+    { id: 'a', necesidad: 10000, falta: 30000, prioridad: 1, fecha: '2026-11-20' },
+    { id: 'b', necesidad: 5000, falta: 5000, prioridad: 1, fecha: '2026-11-25' },
+  ];
+  assert.deepEqual(L.asignar(items, 15000), { reparto: { a: 10000, b: 5000 }, extra: 0 });
+  assert.deepEqual(L.asignar(items, 40000), { reparto: { a: 30000, b: 5000 }, extra: 5000 });
+});
+
+test('asignar: si no alcanza, reparte en proporción a lo que necesita cada una', () => {
+  const items = [
+    { id: 'a', necesidad: 60000, falta: 300000, prioridad: 1, fecha: '2026-11-20' },
+    { id: 'b', necesidad: 20000, falta: 100000, prioridad: 1, fecha: '2026-11-25' },
+  ];
+  assert.deepEqual(L.asignar(items, 40000).reparto, { a: 30000, b: 10000 });
+});
+
+test('asignar: la prioridad alta va primero', () => {
+  const items = [
+    { id: 'internet', necesidad: 10000, falta: 90000, prioridad: 2, fecha: '2026-11-15' },
+    { id: 'luz', necesidad: 30000, falta: 120000, prioridad: 1, fecha: '2026-11-20' },
+  ];
+  assert.deepEqual(L.asignar(items, 35000).reparto, { luz: 30000, internet: 5000 });
+});
+
+test('repartirDia: explica cuánto faltaba, cuánto necesitaba y cuántos días quedaban', () => {
+  const obs = [
+    ob({ id: 'luz', monto: 120000, proximo: '2026-11-15' }),
+    ob({ id: 'colegio', monto: 450000, proximo: '2026-12-05' }),
+  ];
+  const r = L.repartirDia(obs, 40000, '2026-11-12', { diasSemana: 7, margen: 0 });
+  assert.equal(r.reparto.luz + r.reparto.colegio, 40000);
+  assert.ok(r.reparto.luz > 0 && r.reparto.colegio > 0, 'las dos reciben algo');
+  assert.deepEqual(r.detalle.luz, { falta: 120000, necesidad: 40000, dias: 3, fecha: '2026-11-15' });
+  const cubiertas = [ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 120000 })];
+  assert.deepEqual(L.repartirDia(cubiertas, 40000, '2026-11-12', {}).extra, 40000);
+});
+
+test('plan: avisa lo que no alcanza y la cuota necesaria sí alcanza', () => {
   const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 31 };
   const obs = [
-    ob({ id: 'luz', dia: 15, monto: 120000, proximo: '2026-11-15' }),      // 3 días → 120.000 ✔
-    ob({ id: 'tarjeta', dia: 20, monto: 300000, proximo: '2026-11-20' }),  // 8 días → 320.000 − 120.000 = 200.000 ✗ faltan 100.000
+    ob({ id: 'luz', dia: 15, monto: 120000, proximo: '2026-11-15' }),
+    ob({ id: 'tarjeta', dia: 20, monto: 300000, proximo: '2026-11-20' }),
   ];
   const p = L.plan(obs, '2026-11-12', cfg);
-  const luz = p.items.find((x) => x.id === 'luz' && x.primera);
-  const tarjeta = p.items.find((x) => x.id === 'tarjeta' && x.primera);
-  assert.equal(luz.faltante, 0);
-  assert.equal(tarjeta.faltante, 100000);
   assert.equal(p.alcanza, false);
-  assert.equal(p.necesaria, 53000); // 420.000 / 8 = 52.500 → 53.000
+  assert.ok(p.faltanteTotal >= 60000); // 9 días × 40.000 = 360.000 para 420.000
+  assert.equal(L.plan(obs, '2026-11-12', { ...cfg, cuotaDiaria: p.necesaria }).alcanza, true);
+  assert.equal(L.plan(obs, '2026-11-12', { ...cfg, cuotaDiaria: p.necesaria - 1000 }).alcanza, false);
 });
 
 test('plan: si alcanza, todo queda cubierto', () => {
   const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 20 };
   const p = L.plan([ob({ id: 'luz', dia: 22, monto: 120000, proximo: '2026-11-22' })], '2026-11-12', cfg);
   assert.equal(p.alcanza, true);
-  assert.equal(p.necesaria, 12000);
+  assert.ok(p.necesaria <= 13000);
 });
 
-test('plan: lo que ya se apartó hoy no cuenta dos veces', () => {
-  const cfg = { diasSemana: 7, margen: 0, cuotaDiaria: 40000, horizonte: 31 };
-  // paga mañana 80.000; hoy ya apartó 40.000 (ya sumado en apartado) → falta 40.000 y no queda capacidad hoy
-  const p = L.plan([ob({ id: 'x', dia: 13, monto: 80000, proximo: '2026-11-13', apartado: 40000 })], '2026-11-12', cfg, 40000);
-  assert.equal(p.items[0].faltante, 40000);
-});
-
-test('repartirDia: primero lo que vence antes; lo que sobra es ahorro extra', () => {
-  const obs = [
-    ob({ id: 'colegio', monto: 450000, proximo: '2026-12-05' }),
-    ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 100000 }),
-  ];
-  assert.deepEqual(L.repartirDia(obs, 40000), { reparto: { luz: 20000, colegio: 20000 }, extra: 0 });
-  const cubiertas = [ob({ id: 'luz', monto: 120000, proximo: '2026-11-15', apartado: 120000 })];
-  assert.deepEqual(L.repartirDia(cubiertas, 40000), { reparto: {}, extra: 40000 });
+test('ya pagó el recibo de este mes: el próximo es el del mes siguiente', () => {
+  assert.equal(L.proximaSiYaPagoEsteMes('2026-11-12', 18), '2026-12-18'); // aún no vencía
+  assert.equal(L.proximaSiYaPagoEsteMes('2026-11-12', 5), '2026-12-05');  // ya había vencido
+  assert.equal(L.proximaSiYaPagoEsteMes('2026-12-20', 31), '2027-01-31');
+  assert.equal(L.proximaSiYaPagoEsteMes('2027-01-10', 31), '2027-02-28');
 });
