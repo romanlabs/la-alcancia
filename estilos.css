@@ -336,3 +336,22 @@ body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   h2 { font-size: 1.05rem; }
   .botones button.chico { flex: 1 1 auto; }
 }
+
+/* ===== Íconos propios (SVG) ===== */
+.icono { width: 1.15em; height: 1.15em; vertical-align: -0.22em; flex-shrink: 0; overflow: visible; }
+.pestanas .icono { width: 24px; height: 24px; }
+.pestanas button.activa .icono { color: var(--verde); }
+.etiqueta { display: inline-flex; align-items: center; gap: 4px; }
+.etiqueta .icono { width: 1.05em; height: 1.05em; }
+.nota { display: flex; gap: 6px; align-items: flex-start; }
+.nota .icono { margin-top: .15em; }
+.nube { display: inline-flex; align-items: center; gap: 4px; }
+.nube .icono { width: 1.25em; height: 1.25em; }
+.alerta.con-icono { display: flex; gap: 10px; align-items: flex-start; }
+.alerta.con-icono > .icono { width: 1.5em; height: 1.5em; margin-top: 1px; }
+.alerta .icono { color: inherit; }
+button.principal .icono { width: 1.25em; height: 1.25em; margin-right: 4px; }
+.candado { margin: 0; color: var(--verde); }
+.icono.grande { width: 56px; height: 56px; }
+.fila-quitar button .icono { width: 18px; height: 18px; }
+h2 .icono, h3 .icono { width: 1.2em; height: 1.2em; color: var(--verde); margin-right: 2px; }

@@ -287,3 +287,10 @@ test('anual: se va juntando poco a poco en los meses que faltan', () => {
   const r = L.repartirDia([o], 40000, '2026-11-12', { frecuencia: 'mensual' });
   assert.ok(r.detalle.cf.necesidad > 0 && r.detalle.cf.necesidad <= 12000, 'necesita ~1/11 por mes');
 });
+
+test('plan: pagos a más de 31 días también cuentan (sueldo mensual)', () => {
+  const obs = [ob({ id: 'd', dia: 18, monto: 150000, proximo: '2026-12-18' }), ob({ id: 'c', dia: 18, monto: 70000, proximo: '2026-12-18' })];
+  const p = L.plan(obs, '2026-11-12', { frecuencia: 'mensual', cuotaDiaria: 0 });
+  assert.equal(p.items.length >= 2, true);
+  assert.ok(p.necesaria > 0);
+});

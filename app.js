@@ -32,6 +32,8 @@ const PLANTILLA_PERSONAL = [
 
 /* ---------- utilidades ---------- */
 const $ = (sel, raiz = document) => raiz.querySelector(sel);
+/** Ícono propio (ver el sprite SVG en index.html). */
+const ico = (nombre, clase = '') => `<svg class="icono ${clase}" aria-hidden="true" focusable="false"><use href="#i-${nombre}"></use></svg>`;
 const $$ = (sel, raiz = document) => [...raiz.querySelectorAll(sel)];
 const fmtPesos = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
 const pesos = (n) => fmtPesos.format(Math.round(n || 0));
@@ -51,7 +53,7 @@ function cuandoVence(f) {
   return `en ${d} días`;
 }
 
-const ETIQUETA = { cubierta: 'Lista ✔', 'al-dia': 'Va bien', atrasada: 'No alcanza', 'vence-hoy': 'Vence hoy', vencida: 'Vencida', terminada: 'Terminada' };
+const ETIQUETA = { cubierta: 'Lista', 'al-dia': 'Va bien', atrasada: 'No alcanza', 'vence-hoy': 'Vence hoy', vencida: 'Vencida', terminada: 'Terminada' };
 
 /* Campos de plata: muestran puntos de miles mientras se escribe */
 function campoPesos(nombre, valor = '', extra = '') {
@@ -217,6 +219,27 @@ function crearObligacion(campos) {
 const apartadoDelDia = (fecha) => datos.registros.filter((r) => r.fecha === fecha).reduce((s, r) => s + r.apartado, 0);
 
 /** Proyección con la cuota diaria (o la necesaria, si la cuota está en automático). */
+/** Próximo día en que le pagan (perfiles con sueldo). Si ya pasó, avanza al siguiente. */
+function proximoPagoSueldo() {
+  if (!datos.proximoPago || !datos.frecuencia || datos.frecuencia === 'diario') return null;
+  let p = datos.proximoPago;
+  const dia = L.aFecha(datos.proximoPago).getDate();
+  const avanzar = (x) => (datos.frecuencia === 'mensual' ? L.siguienteMensual(x, dia) : L.sumarDias(x, frec().periodo));
+  for (let i = 0; p < hoy() && i < 60; i++) p = avanzar(p);
+  return { fecha: p, siguiente: avanzar(p) };
+}
+
+/** Con sueldo: lo que hay que apartar del próximo pago = lo que vence antes del pago siguiente. */
+function aparteDelSueldo() {
+  const s = proximoPagoSueldo();
+  if (!s) return null;
+  const total = activas()
+    .filter((o) => o.proximo && o.proximo < s.siguiente)
+    .reduce((t, o) => t + Math.max(0, (o.monto || 0) - (o.apartado || 0)), 0);
+  const fraccion = 1 - Math.min(90, datos.ahorroPct || 0) / 100;
+  return { ...s, total: L.redondearMil(total / fraccion) };
+}
+
 function proyeccion() {
   const f = hoy();
   const desde = L.sumarDias(f, -(frec().periodo - 1));
@@ -228,12 +251,13 @@ function proyeccion() {
   let p = L.plan(activas(), f, { ...datos, cuotaDiaria: cuotaCuentas }, yaCuentas);
   const automatica = !datos.cuotaDiaria;
   if (automatica) p = L.plan(activas(), f, { ...datos, cuotaDiaria: p.necesaria }, yaCuentas);
-  const objetivo = automatica ? L.redondearMil(p.necesaria / fraccion) : datos.cuotaDiaria;
+  const sueldo = aparteDelSueldo();
+  const objetivo = automatica ? (sueldo ? sueldo.total : L.redondearMil(p.necesaria / fraccion)) : datos.cuotaDiaria;
   p.necesariaTotal = L.redondearMil(p.necesaria / fraccion);
   p.fraccion = fraccion;
   const faltantes = {};
   for (const x of p.items) if (x.primera) faltantes[x.id] = x.faltante;
-  return { ...p, automatica, objetivo, ya, pendienteHoy: Math.max(0, objetivo - ya), faltantes };
+  return { ...p, automatica, objetivo, ya, sueldo, pendienteHoy: Math.max(0, objetivo - ya), faltantes };
 }
 
 /** Estado de un pago según la proyección: va bien / no alcanza / lista / vence / vencida. */
@@ -438,6 +462,11 @@ function preguntasTrabajo() {
     <label>¿Cuánto quiere apartar ${(FRECUENCIAS[f] || FRECUENCIAS.diario).cada}?</label>
     ${campoPesos('cuotaDiaria', datos.cuotaDiaria)}
     <p class="suave">La app reparte esa plata entre los pagos, primero lo que vence antes, y le avisa si no alcanza. Deje en $0 para que la app calcule cuánto hace falta.</p>
+    <div ${f === 'diario' ? 'hidden' : ''} data-solo-sueldo>
+    <label>¿Cuándo le pagan la próxima vez?</label>
+    <input type="date" name="proximoPago" value="${datos.proximoPago || ''}">
+    <p class="suave">Con esto la app sabe cuánto apartar de ese pago: lo que vence antes del pago siguiente.</p>
+    </div>
     <div ${f === 'diario' ? '' : 'hidden'} data-solo-diario>
     <label>¿Cuántos días trabaja a la semana, más o menos?</label>
     ${botonesNumero('diasSemana', 1, 7, datos.diasSemana)}
@@ -449,6 +478,7 @@ function preguntasTrabajo() {
 }
 function leerTrabajo(fd) {
   if (fd.get('frecuencia')) datos.frecuencia = fd.get('frecuencia');
+  if (fd.has('proximoPago')) datos.proximoPago = fd.get('proximoPago') || null;
   const cfg = L.ajustes({ diasSemana: fd.get('diasSemana'), margen: fd.get('margen') });
   datos.diasSemana = cfg.diasSemana;
   datos.margen = cfg.margen;
@@ -483,7 +513,7 @@ function filaPago(p, i) {
 function pantallaInicio(c) {
   c.innerHTML = `
     <div class="tarjeta destacada">
-      <p class="cifra-m">Hola 👋</p>
+      <p class="cifra-m">Hola</p>
       <p>Perfil <b>${esc(datos.perfilNombre || 'Mamá')}</b>. Esta app le dice, cada vez que le entra plata, <b>cuánto guardar</b> y para qué, para que el día de pagar la plata ya esté lista.</p>
       <p class="suave">Llene solo lo que aplique. Lo que deje sin valor no se agrega. Todo se puede cambiar después.</p>
     </div>
@@ -501,7 +531,10 @@ function pantallaInicio(c) {
   if ($('#btn-ya-tengo')) $('#btn-ya-tengo').onclick = dialogoCuenta;
   let filas = plantillaPerfil().length;
   $('#form-inicio').addEventListener('change', (e) => {
-    if (e.target.name === 'frecuencia') $('[data-solo-diario]').hidden = e.target.value !== 'diario';
+    if (e.target.name === 'frecuencia') {
+      $('[data-solo-diario]').hidden = e.target.value !== 'diario';
+      $('[data-solo-sueldo]').hidden = e.target.value === 'diario';
+    }
   });
   $('#btn-otra-fila').onclick = () => {
     $('#filas').insertAdjacentHTML('beforeend', filaPago({ nombre: '', tipo: 'mensual', prioridad: 2, deuda: true }, filas));
@@ -561,7 +594,7 @@ function avisoPlan(p) {
   const conAhorro = datos.ahorroPct ? ` (contando el ${datos.ahorroPct}% para ahorro)` : '';
   const lineaNormal = normal ? `<p class="suave" style="margin-top:8px">Un mes normal, sin atrasos, necesita unos <b>${pesos(normalTotal)}</b> ${frec().por}${conAhorro}${datos.frecuencia === 'diario' || !datos.frecuencia ? `, trabajando ${datos.diasSemana} días a la semana` : ''}.</p>` : '';
   if (!malos.length) {
-    return `<div class="alerta verde">✔ Con ${cuota} ${frec().por} alcanza para todo lo del próximo mes.${lineaNormal}</div>`;
+    return `<div class="alerta verde con-icono">${ico('check')}<div>Con ${cuota} ${frec().por} alcanza para todo lo del próximo mes.${lineaNormal}</div></div>`;
   }
   return `
     <div class="alerta ambar">
@@ -603,9 +636,11 @@ function pantallaHoy(c) {
   c.innerHTML = `
     <div class="columnas"><div>
     <div class="tarjeta destacada">
-      <p class="suave">${datos.frecuencia && datos.frecuencia !== 'diario' ? (p.ya ? `Todavía le falta apartar de este ${frec().pago}` : 'Cuando le paguen, aparte') : (p.ya ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar')}</p>
+      <p class="suave">${datos.frecuencia && datos.frecuencia !== 'diario'
+        ? (p.ya ? `Todavía le falta apartar de este ${frec().pago}` : (p.sueldo ? `${p.sueldo.fecha === hoy() ? 'Hoy' : `El ${fechaCorta(p.sueldo.fecha)}`}, cuando le paguen, aparte` : 'Cuando le paguen, aparte'))
+        : (p.ya ? 'Todavía le falta apartar hoy' : 'Hoy toca apartar')}</p>
       <p class="cifra">${pesos(p.pendienteHoy)}</p>
-      <p class="suave">${p.pendienteHoy ? (p.automatica ? 'para que alcance para todos los pagos.' : `de la cuota de ${pesos(p.objetivo)} ${frec().por}.`) : (datos.frecuencia && datos.frecuencia !== 'diario' ? `¡Listo! Ya apartó lo de este ${frec().pago}. 💪` : '¡Listo por hoy! 💪')}</p>
+      <p class="suave">${p.pendienteHoy ? (p.automatica ? (p.sueldo ? `para lo que vence antes del siguiente pago (${fechaCorta(p.sueldo.siguiente)}).` : 'para que alcance para todos los pagos.') : `de la cuota de ${pesos(p.objetivo)} ${frec().por}.`) : (datos.frecuencia && datos.frecuencia !== 'diario' ? `¡Listo! Ya apartó lo de este ${frec().pago}.` : '¡Listo por hoy!')}</p>
     </div>
     ${avisoPlan(p)}
 
@@ -615,7 +650,7 @@ function pantallaHoy(c) {
       <p class="suave">Lo que le dieron hoy para apartar. Si fue más o menos de ${pesos(p.objetivo)}, cámbielo.</p>
       <div id="calculo"></div>
       <details class="detalle-dia"><summary>Agregar detalle del día <span class="suave">(opcional)</span></summary>${camposDia()}</details>
-      <button type="button" class="principal" id="btn-registrar">Listo, ya lo aparté ✔</button>
+      <button type="button" class="principal" id="btn-registrar">${ico('check')} Listo, ya lo aparté</button>
       <p class="suave" style="margin-top:12px">¿Hoy no hubo plata? No registre nada: lo que falta se reparte solo en los próximos días.</p>
     </form>
 
@@ -678,13 +713,13 @@ function explicarReparto(r, apartar) {
           <span class="suave">Faltan ${pesos(d.falta)} · vence ${fechaCorta(d.fecha)} · ${d.dias <= 1 ? (datos.frecuencia && datos.frecuencia !== 'diario' ? `vence antes del próximo ${frec().pago} → toca completo` : 'ya se debe juntar → toca completo') : `${d.dias} ${frec().pagos} → necesita ${pesos(d.necesidad)} ${frec().por}`}</span></span>
           <span class="monto">${pesos(m)}</span></li>`).join('')}
       ${Object.entries(r.ahorro || {}).map(([id, m]) => `
-        <li><span><b>💰 ${esc(buscarMeta(id)?.nombre || 'Ahorro')}</b><br><span class="suave">Ahorro${r.sobroDeCuentas ? ' (incluye lo que sobró: las cuentas ya tienen lo suyo de hoy)' : ''}</span></span><span class="monto">${pesos(m)}</span></li>`).join('')}
-      ${r.extra ? `<li><span><b>💰 Ahorro sin meta</b><br><span class="suave">${r.sobroDeCuentas ? 'Las cuentas ya tienen lo suyo de hoy. ' : ''}Cree metas en "Ahorro" para repartirlo</span></span><span class="monto">${pesos(r.extra)}</span></li>` : ''}
+        <li><span><b>${ico('monedas')} ${esc(buscarMeta(id)?.nombre || 'Ahorro')}</b><br><span class="suave">Ahorro${r.sobroDeCuentas ? ' (incluye lo que sobró: las cuentas ya tienen lo suyo de hoy)' : ''}</span></span><span class="monto">${pesos(m)}</span></li>`).join('')}
+      ${r.extra ? `<li><span><b>${ico('monedas')} Ahorro sin meta</b><br><span class="suave">${r.sobroDeCuentas ? 'Las cuentas ya tienen lo suyo de hoy. ' : ''}Cree metas en "Ahorro" para repartirlo</span></span><span class="monto">${pesos(r.extra)}</span></li>` : ''}
     </ul>
     ${sinPlata.length ? `<p class="suave">Hoy no reciben: ${sinPlata.map(({ o }) => esc(o.nombre)).join(', ')} (${sinPlata.every(({ o }) => (o.prioridad || 2) > 1) ? 'prioridad más baja: reciben cuando las importantes estén al día' : 'reciben en los próximos días'}).</p>` : ''}
     ${(() => {
       const movs = movimientosCajitas(r);
-      return movs.length ? `<div class="alerta verde">👉 Hoy mueva en ${esc(banco())}:
+      return movs.length ? `<div class="alerta verde">${ico('mover')} Hoy mueva en ${esc(banco())}:
         <ul class="lista" style="margin:6px 0 0">${movs.map(([k, m]) => `<li><span>a la cajita <b>${esc(k)}</b></span><span class="monto">${pesos(m)}</span></li>`).join('')}</ul></div>` : '';
     })()}`;
 }
@@ -736,7 +771,7 @@ function lineaPlan(o, faltantes) {
   if (f == null) return '';
   return f > 0
     ? `<p class="alerta ambar" style="margin:8px 0 0;padding:8px 12px">Con la cuota faltarían ${pesos(f)}</p>`
-    : '<p class="suave">✔ Con la cuota llega completo</p>';
+    : `<p class="suave">${ico('check')} Con la cuota llega completo</p>`;
 }
 
 function tarjetaCorta(o, f, faltantes) {
@@ -780,7 +815,7 @@ function tarjetaPagoTarjeta() {
   const [fecha, g] = grupos[0];
   return `
     <div class="tarjeta">
-      <h3 style="margin:0 0 4px">💳 Pago de la tarjeta · ${fechaCorta(fecha)}</h3>
+      <h3 style="margin:0 0 4px">${ico('tarjeta')} Pago de la tarjeta · ${fechaCorta(fecha)}</h3>
       <p class="cifra-m">${pesos(g.total)}</p>
       <ul class="lista">${Object.entries(g.porPerfil).map(([n, m]) => `<li><span>${esc(n)}</span><span class="monto">${pesos(m)}</span></li>`).join('')}
         <li><span>Ya apartado</span><span class="monto">${pesos(g.apartado)}</span></li></ul>
@@ -828,10 +863,10 @@ function pantallaPagos(c) {
         <div class="barra-progreso"><div style="width:${pct}%"></div></div>
         <p class="suave">${pesos(o.apartado)} apartados${o.saldoTotal != null ? ` · deuda que queda <b>${pesos(o.saldoTotal)}</b>` : ''}</p>
         <div class="etiquetas">
-          ${o.conTarjeta ? '<span class="etiqueta">💳 tarjeta</span>' : ''}
-          ${o.variable ? '<span class="etiqueta" title="El valor cambia: actualícelo cuando llegue el recibo">≈ valor variable</span>' : ''}
+          ${o.conTarjeta ? `<span class="etiqueta">${ico('tarjeta')} tarjeta</span>` : ''}
+          ${o.variable ? `<span class="etiqueta" title="El valor cambia: actualícelo cuando llegue el recibo">${ico('variable')} valor variable</span>` : ''}
         </div>
-        ${o.nota ? `<p class="suave nota">📝 ${esc(o.nota)}</p>` : ''}
+        ${o.nota ? `<p class="suave nota">${ico('nota')} ${esc(o.nota)}</p>` : ''}
         ${lineaPlan(o, p.faltantes)}
         <div class="botones">
           <button class="chico" data-pagar="${o.id}">Ya pagué</button>
@@ -840,7 +875,7 @@ function pantallaPagos(c) {
       </div>`;
     }).join('')}</div>
     ${terminadas.length ? `
-      <h2>Terminadas 🎉</h2>
+      <h2>${ico('trofeo')} Terminadas</h2>
       ${terminadas.map((o) => `
         <div class="tarjeta"><div class="cabeza"><h3>${esc(o.nombre)}</h3><span class="chip terminada">Terminada</span></div>
         <div class="botones"><button class="chico" data-editar="${o.id}">Editar / reactivar</button></div></div>`).join('')}` : ''}
@@ -899,7 +934,7 @@ function dialogoPagar(id) {
     if (o.variable && pagado > 0 && o.saldoTotal == null && o.activa !== false) o.monto = pagado; // estimado para el próximo
     datos.pagos.push({ id: nuevoId(), fecha: fd.get('fecha') || hoy(), obligacionId: o.id, nombre: o.nombre, monto: pagado, antes });
     guardar();
-    avisar(pagado > antes.apartado ? `Pagado. ${pesos(pagado - antes.apartado)} salieron de otro lado.` : 'Pagado ✔');
+    avisar(pagado > antes.apartado ? `Pagado. ${pesos(pagado - antes.apartado)} salieron de otro lado.` : 'Pagado');
     render();
   });
 }
@@ -1003,7 +1038,7 @@ function editar(id) {
     }
     guardar(); render();
     const guardada = id ? o : datos.obligaciones[datos.obligaciones.length - 1];
-    avisar(`Guardado ✔ Próximo pago: ${fechaCorta(guardada.proximo)}`);
+    avisar(`Guardado. Próximo pago: ${fechaCorta(guardada.proximo)}`);
   }, (form) => {
     const pintarCuando = () => {
       const t = form.tipo.value;
@@ -1086,7 +1121,7 @@ function tarjetaMeta(m) {
   const parte = pesoTotal() ? Math.round(((m.porcentaje || 0) / pesoTotal()) * 100) : 0;
   const ritmo = ritmoMeta(m);
   let cuando = '';
-  if (m.objetivo > 0 && (m.ahorrado || 0) >= m.objetivo) cuando = '🎉 ¡Meta cumplida!';
+  if (m.objetivo > 0 && (m.ahorrado || 0) >= m.objetivo) cuando = `${ico('trofeo')} ¡Meta cumplida!`;
   else if (m.objetivo > 0 && ritmo > 0) {
     const dias = Math.ceil((m.objetivo - (m.ahorrado || 0)) / ritmo);
     cuando = `A este ritmo llega en ${dias < 60 ? `${dias} días` : `${Math.round(dias / 30)} meses`}`;
@@ -1097,7 +1132,7 @@ function tarjetaMeta(m) {
       <p class="cifra-m">${pesos(m.ahorrado)}</p>
       ${pct != null ? `<div class="barra-progreso"><div style="width:${pct}%"></div></div><p class="suave">${pct}% de ${pesos(m.objetivo)}</p>` : '<p class="suave">Sin meta de monto</p>'}
       ${cuando ? `<p class="suave">${cuando}</p>` : ''}
-      ${m.nota ? `<p class="suave">📝 ${esc(m.nota)}</p>` : ''}
+      ${m.nota ? `<p class="suave nota">${ico('nota')} ${esc(m.nota)}</p>` : ''}
       <div class="botones">
         <button class="chico" data-sacar="${m.id}">Sacar plata</button>
         <button class="chico" data-editar-meta="${m.id}">Editar</button>
@@ -1256,7 +1291,7 @@ function pantallaHistorial(c) {
   const movimientos = [
     ...datos.registros.map((r) => ({
       fecha: r.fecha,
-      txt: `Le entró ${pesos(r.ingreso)}${r.carro ? ` · gastos ${pesos(r.carro)}` : ''}${r.nota ? `<br><span class="suave">📝 ${esc(r.nota)}</span>` : ''}`,
+      txt: `Le entró ${pesos(r.ingreso)}${r.carro ? ` · gastos ${pesos(r.carro)}` : ''}${r.nota ? `<br><span class="suave nota">${ico('nota')} ${esc(r.nota)}</span>` : ''}`,
       monto: `+${pesos(r.apartado)}`,
       boton: `<button class="chico" data-editar-registro="${r.id}">Editar</button>`,
     })),
@@ -1470,18 +1505,19 @@ function pantallaAjustes(c) {
 
 function filaFuente(nombre) {
   return `<div class="fila-quitar"><input value="${esc(nombre)}" placeholder="Ej: Uber" maxlength="30" aria-label="Fuente de ingreso">
-    <button type="button" class="chico peligro" data-quitar aria-label="Quitar">✕</button></div>`;
+    <button type="button" class="chico peligro" data-quitar aria-label="Quitar">${ico('cerrar')}</button></div>`;
 }
 
 /* ---------- CUENTA EN LA NUBE ---------- */
 const TEXTO_NUBE = {
-  'al-dia': '☁ Guardado', subiendo: '☁ Guardando…', bajando: '☁ Actualizando…',
-  error: '⚠ Sin conexión: se guarda cuando vuelva', 'sin-sesion': '', 'no-disponible': '',
+  'al-dia': 'Guardado', subiendo: 'Guardando…', bajando: 'Actualizando…',
+  error: 'Sin conexión: se guarda cuando vuelva', 'sin-sesion': '', 'no-disponible': '',
 };
 function pintarEstadoNube() {
   const e = $('#nube-estado');
   if (e) {
-    e.textContent = TEXTO_NUBE[Nube.estado] || '';
+    const texto = TEXTO_NUBE[Nube.estado] || '';
+    e.innerHTML = texto ? `${ico(Nube.estado === 'error' ? 'nube-error' : 'nube')}<span>${esc(texto)}</span>` : '';
     e.className = 'nube ' + Nube.estado;
   }
   const t = $('#tarjeta-cuenta');
@@ -1664,7 +1700,7 @@ let esperarHasta = 0;
 function pantallaBloqueo(c) {
   c.innerHTML = `
     <form class="tarjeta" id="form-entrar" style="margin-top:40px;text-align:center">
-      <p class="cifra-m">🔒</p>
+      <p class="candado">${ico('candado', 'grande')}</p>
       <label for="pin">Escriba la clave</label>
       <input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8" style="text-align:center;letter-spacing:8px">
       <button class="principal">Entrar</button>

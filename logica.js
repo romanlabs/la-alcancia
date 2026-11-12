@@ -179,7 +179,7 @@
       let fecha = o.proximo;
       let apartado = o.apartado || 0;
       let saldo = o.saldoTotal != null ? o.saldoTotal : Infinity;
-      for (let n = 0; fecha <= fin && n < 12; n++) {
+      for (let n = 0; (n === 0 || fecha <= fin) && n < 12; n++) { // el próximo pago siempre cuenta
         const cuota = Math.min(o.monto || 0, saldo);
         const falta = Math.max(0, cuota - apartado);
         apartado = Math.max(0, apartado - cuota);
@@ -263,10 +263,16 @@
     return { reparto: r.reparto, extra: r.extra, detalle };
   }
 
+  /** Cuántos días mirar hacia adelante: con sueldo mensual, dos meses; si no, un mes. */
+  function horizontePara(cfg = {}) {
+    if (cfg.horizonte) return cfg.horizonte;
+    return { mensual: 62, quincenal: 45 }[cfg.frecuencia] || 31;
+  }
+
   /** Simula los próximos días repartiendo `cuota` con la misma regla de cada día. */
   function simular(obligaciones, hoy, cfg, cuota, apartadoHoy) {
     const { diasSemana } = ajustes(cfg);
-    const xs = instancias(obligaciones, hoy, cfg.horizonte || 31).map((x, i) => ({ ...x, clave: String(i), restante: x.falta }));
+    const xs = instancias(obligaciones, hoy, horizontePara(cfg)).map((x, i) => ({ ...x, clave: String(i), restante: x.falta }));
     const ultima = xs.reduce((m, x) => (x.fecha > m ? x.fecha : m), hoy);
     const porDia = (cuota * diasSemana) / 7; // en promedio, contando los días que no se trabaja
     for (let f = hoy, i = 0; f <= ultima && i < 400; f = sumarDias(f, 1), i++) {

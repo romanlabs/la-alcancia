@@ -94,7 +94,7 @@ const Nube = (() => {
         user_id: uid, perfil, perfil_nombre: datos.perfilNombre || 'Mamá', frecuencia: datos.frecuencia || 'diario',
         configurado: !!datos.configurado, dias_semana: datos.diasSemana, margen: datos.margen,
         cuota_diaria: datos.cuotaDiaria || 0, fuentes: datos.fuentes, extra: datos.extra || 0,
-        ahorro_pct: datos.ahorroPct || 0, banco: datos.banco || 'Nu',
+        ahorro_pct: datos.ahorroPct || 0, banco: datos.banco || 'Nu', proximo_pago: datos.proximoPago || null,
         actualizado: new Date().toISOString(),
       }, { onConflict: 'user_id,perfil' }));
       const conPerfil = (f) => ({ ...f, perfil });
@@ -142,7 +142,7 @@ const Nube = (() => {
         configurado: conf.configurado, diasSemana: conf.dias_semana, margen: conf.margen,
         cuotaDiaria: num(conf.cuota_diaria), fuentes: conf.fuentes, extra: num(conf.extra),
         ahorroPct: conf.ahorro_pct || 0, metas: mets.map(deFilaMeta), banco: conf.banco || 'Nu',
-        frecuencia: conf.frecuencia || 'diario', perfilNombre: conf.perfil_nombre,
+        frecuencia: conf.frecuencia || 'diario', perfilNombre: conf.perfil_nombre, proximoPago: conf.proximo_pago || null,
         obligaciones: obs.map(deFilaObligacion), registros: regs.map(deFilaRegistro), pagos: pags.map(deFilaPago),
       };
     } catch (e) {
