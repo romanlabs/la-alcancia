@@ -148,7 +148,7 @@ function guardarLocal() {
 }
 
 async function cambiarPerfil(id) {
-  if (id === datos.perfil) return;
+  if (id === datos.perfil) { render(); return; }
   if (typeof Nube !== 'undefined') await Nube.subirSiPendiente(datos);
   guardarLocal();
   perfiles.activo = id;
@@ -180,7 +180,7 @@ function nuevoPerfil() {
 function pintarPerfiles() {
   const caja = $('#perfiles');
   if (!caja) return;
-  caja.hidden = bloqueada;
+  caja.hidden = bloqueada || !nubeLista || !Nube.sesion || eligiendoPerfil;
   caja.innerHTML = perfiles.lista.map((p) =>
     `<button type="button" class="perfil ${p.id === datos.perfil ? 'activo' : ''}" data-perfil="${esc(p.id)}">${esc(p.nombre)}</button>`).join('') +
     '<button type="button" class="perfil mas" id="btn-nuevo-perfil" aria-label="Nuevo perfil">+</button>';
@@ -280,6 +280,102 @@ $('#pestanas').addEventListener('click', (e) => {
   if (b) ir(b.dataset.vista);
 });
 
+
+/* ---------- INICIO DE SESIÓN y ELEGIR PERFIL ---------- */
+let nubeLista = false;       // ya se sabe si hay sesión
+let eligiendoPerfil = false; // recién entró: mostrar los perfiles
+
+function pantallaCargando(c) {
+  c.innerHTML = '<div class="tarjeta" style="margin-top:40px;text-align:center"><p class="suave">Cargando…</p></div>';
+}
+
+function pantallaLogin(c) {
+  if (!Nube.disponible) {
+    c.innerHTML = `<div class="tarjeta" style="margin-top:40px">
+      <p class="cifra-m">Sin conexión</p>
+      <p class="suave">No se pudo conectar con la nube. Revise el internet y vuelva a intentar.</p>
+      <button class="principal" id="btn-reintentar">Reintentar</button></div>`;
+    $('#btn-reintentar').onclick = () => location.reload();
+    return;
+  }
+  c.innerHTML = `
+    <form class="tarjeta" id="form-login" style="margin-top:24px">
+      <p class="cifra-m">Entrar</p>
+      <p class="suave">Las cuentas están guardadas en la nube. Entre con su correo y contraseña.</p>
+      <label for="login-correo">Correo</label><input id="login-correo" name="correo" type="email" autocomplete="email" required>
+      <label for="login-clave">Contraseña</label><input id="login-clave" name="clave" type="password" autocomplete="current-password" required>
+      <button class="principal">Entrar</button>
+      <button type="button" id="btn-olvide-clave" style="width:100%;margin-top:10px">Olvidé la contraseña</button>
+    </form>`;
+  const form = $('#form-login');
+  const botones = () => $$('button', form);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    botones().forEach((b) => (b.disabled = true));
+    try {
+      await Nube.entrar(String(fd.get('correo')).trim(), String(fd.get('clave')));
+      await traerPerfilesDeLaNube();
+      eligiendoPerfil = true;
+      avisar('Sesión iniciada');
+      render();
+    } catch (err) {
+      botones().forEach((b) => (b.disabled = false));
+      avisar(traducirError(err));
+    }
+  };
+  $('#btn-olvide-clave').onclick = async () => {
+    const correo = String(form.correo.value).trim();
+    if (!/^\S+@\S+\.\S+$/.test(correo)) { avisar('Escriba primero su correo arriba'); form.correo.focus(); return; }
+    botones().forEach((b) => (b.disabled = true));
+    try {
+      await Nube.recuperar(correo);
+      avisar('Listo. Revise su correo (también en "spam") y toque el enlace para crear la contraseña nueva.');
+    } catch (err) {
+      avisar(traducirError(err));
+    }
+    botones().forEach((b) => (b.disabled = false));
+  };
+}
+
+function pantallaPerfiles(c) {
+  c.innerHTML = `
+    <h2>¿Qué perfil quiere ver?</h2>
+    <div class="elegir-perfil">${perfiles.lista.map((p) =>
+      `<button type="button" class="tarjeta" data-elegir="${esc(p.id)}"><span class="cifra-m">${esc(p.nombre)}</span></button>`).join('')}</div>
+    <button type="button" class="principal" id="btn-perfil-nuevo">+ Nuevo perfil</button>`;
+  $$('[data-elegir]', c).forEach((b) => (b.onclick = async () => {
+    eligiendoPerfil = false;
+    if (b.dataset.elegir === datos.perfil) { render(); await traerDeLaNube(true); }
+    else await cambiarPerfil(b.dataset.elegir);
+  }));
+  $('#btn-perfil-nuevo').onclick = () => { eligiendoPerfil = false; nuevoPerfil(); };
+}
+
+/** Borra de este celular los datos de todos los perfiles (siguen en la nube). */
+function borrarDatosLocales() {
+  try {
+    for (const p of perfiles.lista) { localStorage.removeItem(claveDatos(p.id)); Nube.olvidarPendiente(p.id); }
+    localStorage.removeItem(CLAVE_PERFILES);
+  } catch (e) { /* nada */ }
+  perfiles = leerPerfiles();
+  datos = cargar('mama');
+  vista = 'hoy';
+}
+
+/** Cerrar sesión: sube lo pendiente, sale y borra los datos de este celular. */
+async function cerrarSesion() {
+  for (const p of perfiles.lista) {
+    const d = p.id === datos.perfil ? datos : cargar(p.id);
+    await Nube.subirSiPendiente(d);
+  }
+  const quedan = perfiles.lista.filter((p) => Nube.hayPendiente(p.id));
+  if (quedan.length && !(await preguntar('Hay cambios que no se han podido subir a la nube (¿sin internet?). Si cierra sesión ahora, esos cambios se pierden. ¿Cerrar igual?', 'Cerrar igual'))) return;
+  await Nube.salir();
+  borrarDatosLocales();
+  render();
+}
+
 function render() {
   $('#fecha-hoy').textContent = fechaLarga(hoy());
   const nav = $('#pestanas');
@@ -287,7 +383,10 @@ function render() {
   $$('button', nav).forEach((b) => b.classList.toggle('activa', b.dataset.vista === vista));
   const c = $('#contenido');
   pintarPerfiles();
+  if (!nubeLista) { nav.hidden = true; return pantallaCargando(c); }
+  if (!Nube.sesion) { nav.hidden = true; return pantallaLogin(c); }
   if (bloqueada) { nav.hidden = true; return pantallaBloqueo(c); }
+  if (eligiendoPerfil) { nav.hidden = true; return pantallaPerfiles(c); }
   if (!datos.configurado) return pantallaInicio(c);
   ({ hoy: pantallaHoy, sobres: pantallaPagos, ahorro: pantallaAhorro, historial: pantallaHistorial, ajustes: pantallaAjustes }[vista] || pantallaHoy)(c);
 }
@@ -1340,9 +1439,8 @@ function activarCuenta() {
   if ($('#btn-cuenta')) $('#btn-cuenta').onclick = dialogoCuenta;
   if ($('#btn-sincronizar')) $('#btn-sincronizar').onclick = async () => { await Nube.subirAhora(datos); await traerDeLaNube(true); avisar('Actualizado'); };
   if ($('#btn-salir')) $('#btn-salir').onclick = async () => {
-    if (!(await preguntar('¿Cerrar sesión? Los datos siguen en este celular y en la nube.', 'Cerrar sesión'))) return;
-    await Nube.salir();
-    render();
+    if (!(await preguntar('¿Cerrar sesión? Los datos quedan guardados en la nube y se borran de este celular hasta que vuelva a entrar.', 'Cerrar sesión'))) return;
+    await cerrarSesion();
   };
 }
 
@@ -1352,20 +1450,27 @@ function dialogoCuenta() {
     <label>Correo</label><input name="correo" type="email" autocomplete="email" required>
     <label>Contraseña <span class="suave">(mínimo 8 caracteres)</span></label>
     <input name="clave" type="password" autocomplete="current-password" minlength="8" required>
-    <p class="suave">"Crear cuenta" solo la primera vez. Le llega un correo para confirmar.</p>
+    <p class="suave">¿No se acuerda de la contraseña? Escriba el correo y toque "Olvidé la contraseña": le llega un correo para crear una nueva.</p>
     <div class="botones acciones">
       <button value="cancelar" formnovalidate>Cancelar</button>
-      <button value="crear">Crear cuenta</button>
+      <button value="olvide" formnovalidate>Olvidé la contraseña</button>
       <button value="entrar" class="principal">Entrar</button>
     </div>
   `, (fd, boton) => {
     const correo = String(fd.get('correo')).trim();
     const clave = String(fd.get('clave'));
-    const accion = boton && boton.value === 'crear' ? 'crear' : 'entrar';
+    const accion = boton && boton.value === 'crear' ? 'crear' : boton && boton.value === 'olvide' ? 'olvide' : 'entrar';
+    if (accion === 'olvide' && !/^\S+@\S+\.\S+$/.test(correo)) { avisar('Escriba primero su correo'); return false; }
     const botones = $$('#modal-form button');
     botones.forEach((b) => (b.disabled = true));
     (async () => {
       try {
+        if (accion === 'olvide') {
+          await Nube.recuperar(correo);
+          $('#modal').close();
+          avisar('Listo. Revise su correo (también en "spam") y toque el enlace para crear la contraseña nueva.');
+          return;
+        }
         if (accion === 'crear') {
           const r = await Nube.crearCuenta(correo, clave);
           if (!r.session) {
@@ -1389,6 +1494,26 @@ function dialogoCuenta() {
   });
 }
 
+/** Después de tocar el enlace del correo de recuperación: pedir la contraseña nueva. */
+function dialogoClaveNueva() {
+  abrirModal(`
+    <h2>Contraseña nueva</h2>
+    <p class="suave">Escriba la contraseña nueva para entrar a la nube (mínimo 8 caracteres). Guárdela en un lugar seguro.</p>
+    <label>Contraseña nueva</label><input name="clave1" type="password" autocomplete="new-password" minlength="8" required>
+    <label>Repítala</label><input name="clave2" type="password" autocomplete="new-password" minlength="8" required>
+    ${botonesModal(false, 'Guardar contraseña')}
+  `, (fd) => {
+    const a = String(fd.get('clave1')), b = String(fd.get('clave2'));
+    if (a.length < 8) { avisar('Mínimo 8 caracteres'); return false; }
+    if (a !== b) { avisar('Las dos contraseñas no coinciden'); return false; }
+    $$('#modal-form button').forEach((x) => (x.disabled = true));
+    Nube.cambiarClave(a)
+      .then(async () => { $('#modal').close(); avisar('Contraseña cambiada. Ya quedó con sesión iniciada.'); await traerDeLaNube(true); })
+      .catch((e) => { $$('#modal-form button').forEach((x) => (x.disabled = false)); avisar(traducirError(e)); });
+    return false;
+  });
+}
+
 function traducirError(e) {
   const m = String((e && (e.message || e.code)) || '');
   if (/Invalid login credentials/i.test(m)) return 'Correo o contraseña incorrectos';
@@ -1396,6 +1521,8 @@ function traducirError(e) {
   if (/already registered|already been registered/i.test(m)) return 'Ese correo ya tiene cuenta: use "Entrar"';
   if (/Signups not allowed|signup.*disabled/i.test(m)) return 'No se permiten cuentas nuevas';
   if (/Password should be/i.test(m)) return 'La contraseña es muy corta o muy sencilla';
+  if (/rate limit|too many|security purposes/i.test(m)) return 'Ya se mandó un correo hace poco. Espere unos minutos y revise su bandeja (y "spam")';
+  if (/same.*password|different from the old/i.test(m)) return 'La contraseña nueva debe ser distinta a la anterior';
   if (/fetch|network/i.test(m)) return 'Sin conexión a internet';
   return 'No se pudo: ' + m;
 }
@@ -1417,11 +1544,15 @@ async function traerDeLaNube(forzarPintar = false) {
 }
 
 async function iniciarNube() {
-  if (typeof Nube === 'undefined' || !Nube.disponible) return;
+  if (typeof Nube === 'undefined' || !Nube.disponible) { nubeLista = true; render(); return; }
   Nube.onCambio(pintarEstadoNube);
   Nube.onSubido(guardarLocal); // la lista de borrados ya se aplicó en la nube
-  await Nube.iniciar();
+  try { await Nube.iniciar(); } catch (e) { /* sin conexión: sigue con la sesión guardada si hay */ }
+  nubeLista = true;
+  render();
   pintarEstadoNube();
+  if (!Nube.sesion) return;
+  if (Nube.recuperando) dialogoClaveNueva();
   await traerPerfilesDeLaNube();
   await traerDeLaNube(true);
 }
@@ -1494,10 +1625,10 @@ function pantallaBloqueo(c) {
   };
   $('#olvide').onclick = async (e) => {
     e.preventDefault();
-    if (!(await preguntar('Sin la clave no se puede entrar. La única salida es BORRAR TODO lo de este teléfono (después puede cargar una copia de seguridad). ¿Borrar todo?', 'Borrar todo'))) return;
-    try { localStorage.removeItem(CLAVE_PIN); localStorage.removeItem(CLAVE); } catch (err) { /* nada */ }
-    await Nube.salir(); // para volver a ver los datos de la nube hay que entrar con la cuenta
-    datos = estadoNuevo();
+    if (!(await preguntar('Se quita la clave, se cierra la sesión y se borran los datos de este celular. Los datos siguen en la nube: para verlos, entre otra vez con su correo y contraseña. ¿Seguir?', 'Seguir'))) return;
+    try { localStorage.removeItem(CLAVE_PIN); } catch (err) { /* nada */ }
+    await Nube.salir();
+    borrarDatosLocales();
     bloqueada = false;
     render();
   };

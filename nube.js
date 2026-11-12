@@ -12,6 +12,8 @@ const Nube = (() => {
   const PENDIENTE = 'la-alcancia-nube-pendiente';
   const ULTIMO_USUARIO = 'la-alcancia-nube-usuario';
 
+  // ¿Se abrió la app desde el enlace de "olvidé la contraseña"? (hay que mirarlo antes de que Supabase limpie la dirección)
+  const vieneDeRecuperacion = typeof location !== 'undefined' && /type=recovery/.test(location.hash + location.search);
   const disponible = typeof window !== 'undefined' && window.supabase && window.supabase.createClient;
   const sb = disponible ? window.supabase.createClient(URL_PROYECTO, LLAVE_PUBLICA, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -22,6 +24,8 @@ const Nube = (() => {
   let temporizador = null;
   let alCambiar = () => {};
   let alSubir = () => {};
+  let recuperando = vieneDeRecuperacion;
+  if (sb) sb.auth.onAuthStateChange((evento) => { if (evento === 'PASSWORD_RECOVERY') recuperando = true; });
 
   // "pendiente" por perfil (el de mamá conserva la clave de antes)
   const clavePendiente = (perfil) => (!perfil || perfil === 'mama' ? PENDIENTE : `${PENDIENTE}:${perfil}`);
@@ -181,6 +185,21 @@ const Nube = (() => {
       return data;
     },
 
+    /** Manda el correo para crear una contraseña nueva. */
+    async recuperar(correo) {
+      const { error } = await sb.auth.resetPasswordForEmail(correo, { redirectTo: location.origin + location.pathname });
+      if (error) throw error;
+    },
+
+    /** ¿Se entró con el enlace del correo de recuperación? (hay que pedir la contraseña nueva) */
+    get recuperando() { return recuperando; },
+
+    async cambiarClave(nueva) {
+      const { error } = await sb.auth.updateUser({ password: nueva });
+      if (error) throw error;
+      recuperando = false;
+    },
+
     async salir() {
       if (sb) await sb.auth.signOut();
       sesion = null;
@@ -236,6 +255,7 @@ const Nube = (() => {
     },
 
     hayPendiente,
+    olvidarPendiente: (perfil) => marcar(false, perfil),
 
     /** Perfiles guardados en la nube: [{ id, nombre }]. */
     async listarPerfiles() {

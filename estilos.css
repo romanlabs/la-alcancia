@@ -269,3 +269,7 @@ details.detalle-dia summary { cursor: pointer; font-weight: 600; min-height: 44p
 /* Frecuencia de ingresos: 2 columnas */
 .dias.frecuencias { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .dias.frecuencias label { font-size: .85rem; padding: 0 6px; text-align: center; }
+
+/* Elegir perfil después de entrar */
+.elegir-perfil { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.elegir-perfil .tarjeta { margin: 0; min-height: 96px; cursor: pointer; text-align: center; }
