@@ -747,7 +747,7 @@ function tarjetaCorta(o, f, faltantes) {
       <div class="cabeza"><h3>${esc(o.nombre)}</h3><span class="chip ${est}">${ETIQUETA[est]}</span></div>
       <p class="suave">${fechaCorta(o.proximo)} · ${cuandoVence(o.proximo)}</p>
       <div class="barra-progreso"><div style="width:${pct}%"></div></div>
-      <p><b>${pesos(o.apartado)}</b> de ${pesos(o.monto)}</p>
+      <p><b>${pesos(o.apartado)}</b> de ${o.variable ? '≈ ' : ''}${pesos(o.monto)}</p>
       ${lineaPlan(o, faltantes)}
       ${est === 'vence-hoy' || est === 'vencida' || est === 'cubierta'
         ? `<div class="botones"><button class="chico" data-pagar="${o.id}">Ya pagué</button></div>` : ''}
@@ -778,7 +778,8 @@ function pantallaPagos(c) {
       return `
       <div class="tarjeta">
         <div class="cabeza"><h3>${esc(o.nombre)}</h3><span class="chip ${est}">${ETIQUETA[est]}</span></div>
-        <p class="suave">${pesos(o.monto)} · ${cada}</p>
+        <p class="suave">${o.variable ? '≈ ' : ''}${pesos(o.monto)} · ${cada}</p>
+        ${o.variable ? '<p class="suave">💡 El valor cambia cada mes: cuando llegue el recibo, actualícelo en "Editar".</p>' : ''}
         <p>Próximo pago: <b>${fechaCorta(o.proximo)}</b> (${cuandoVence(o.proximo)})</p>
         <div class="barra-progreso"><div style="width:${pct}%"></div></div>
         <p><b>${pesos(o.apartado)}</b> apartados de ${pesos(o.monto)}</p>
@@ -840,6 +841,7 @@ function dialogoPagar(id) {
     <p class="suave">Tiene apartados ${pesos(o.apartado)}.</p>
     <label>¿Cuánto pagó?</label>
     ${campoPesos('pagado', o.monto)}
+    ${o.variable ? '<p class="suave">Ponga lo que llegó en el recibo. Ese valor queda como estimado para el próximo mes.</p>' : ''}
     <label>Fecha del pago</label><input type="date" name="fecha" value="${hoy()}" max="${hoy()}">
     <p class="suave">Si es el fondo del carro y no lo usó, ponga $0: la plata sigue guardada y pasa al otro mes.</p>
     ${botonesModal(false, 'Pagado')}
@@ -847,6 +849,7 @@ function dialogoPagar(id) {
     const pagado = num(fd.get('pagado'));
     const antes = { ...o };
     Object.assign(o, L.pagar(o, pagado));
+    if (o.variable && pagado > 0 && o.saldoTotal == null && o.activa !== false) o.monto = pagado; // estimado para el próximo
     datos.pagos.push({ id: nuevoId(), fecha: fd.get('fecha') || hoy(), obligacionId: o.id, nombre: o.nombre, monto: pagado, antes });
     guardar();
     avisar(pagado > antes.apartado ? `Pagado. ${pesos(pagado - antes.apartado)} salieron de otro lado.` : 'Pagado ✔');
@@ -898,6 +901,7 @@ function editar(id) {
       <option value="3" ${o.prioridad === 3 ? 'selected' : ''}>Puede esperar</option>
     </select>
     ${id ? `<label>Plata ya apartada para esto</label>${campoPesos('apartado', o.apartado)}` : ''}
+    <label class="check"><input type="checkbox" name="variable" ${o.variable ? 'checked' : ''}> El valor cambia cada mes (recibo por consumo, cobro en dólares)</label>
     ${campoCajita(o.bolsillo, cajitaCuentas())}
     <label>Nota <span class="suave">(opcional)</span></label>
     <input name="nota" value="${esc(o.nota)}" placeholder="Ej: número de contrato, a quién se le paga…" maxlength="160">
@@ -921,6 +925,7 @@ function editar(id) {
       monto: num(fd.get('monto')),
       prioridad: Number(fd.get('prioridad')),
       saldoTotal: num(fd.get('saldo')) || null,
+      variable: !!fd.get('variable'),
       nota: String(fd.get('nota') || '').trim(),
       bolsillo: String(fd.get('bolsillo') || '').trim(),
     };

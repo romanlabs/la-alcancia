@@ -41,13 +41,13 @@ const Nube = (() => {
     dia: o.tipo === 'unica' ? null : (o.dia ?? null), fecha: o.fecha || null,
     monto: o.monto || 0, apartado: o.apartado || 0, prioridad: o.prioridad || 2,
     saldo_total: o.saldoTotal ?? null, inicio: o.inicio || null, proximo: o.proximo || null,
-    activa: o.activa !== false, nota: o.nota || '', bolsillo: o.bolsillo || '',
+    activa: o.activa !== false, nota: o.nota || '', bolsillo: o.bolsillo || '', variable: !!o.variable,
   });
   const deFilaObligacion = (f) => ({
     id: f.id, nombre: f.nombre, tipo: f.tipo, dia: f.dia ?? undefined, fecha: f.fecha || undefined,
     monto: num(f.monto), apartado: num(f.apartado), prioridad: f.prioridad,
     saldoTotal: f.saldo_total == null ? null : num(f.saldo_total),
-    inicio: f.inicio, proximo: f.proximo, activa: f.activa, nota: f.nota || '', bolsillo: f.bolsillo || '',
+    inicio: f.inicio, proximo: f.proximo, activa: f.activa, nota: f.nota || '', bolsillo: f.bolsillo || '', variable: !!f.variable,
   });
   const aFilaRegistro = (r, uid) => ({
     id: r.id, user_id: uid, fecha: r.fecha, ingresos: r.ingresos || {}, ingreso: r.ingreso || 0,
