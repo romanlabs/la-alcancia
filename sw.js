@@ -1,5 +1,5 @@
 // Guarda la app para que abra sin internet. Cambie VERSION cada vez que publique cambios.
-const VERSION = 'alcancia-v13';
+const VERSION = 'alcancia-v14';
 const ARCHIVOS = ['./', 'index.html', 'estilos.css', 'logica.js', 'nube.js', 'app.js', 'manifest.webmanifest', 'icono.svg'];
 
 self.addEventListener('install', (e) => {
@@ -21,7 +21,8 @@ self.addEventListener('fetch', (e) => {
   // Solo se guardan los archivos de la app y la librería del CDN; la base de datos siempre va directo.
   if (url.origin !== self.location.origin && url.hostname !== 'cdn.jsdelivr.net') return;
   e.respondWith(
-    fetch(e.request)
+    // no-cache: siempre pregunta al servidor si hay versión nueva (GitHub guarda 10 min si no)
+    fetch(e.request, { cache: 'no-cache' })
       .then((r) => {
         const copia = r.clone();
         caches.open(VERSION).then((c) => c.put(e.request, copia));

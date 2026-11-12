@@ -59,4 +59,4 @@ npm start         # sirve la app en http://localhost:5173
 Hay que publicarla en una dirección https (por ejemplo GitHub Pages o Netlify: son archivos estáticos, se suben tal cual).
 Luego, en el celular: abrir el enlace en Chrome → menú ⋮ → **Agregar a la pantalla principal**.
 
-Al publicar cambios, sube `VERSION` en `sw.js`.
+Al publicar cambios, sube `VERSION` en `sw.js` y el `?v=` de los archivos en `index.html` (mismo número).
